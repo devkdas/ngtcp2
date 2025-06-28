@@ -48,7 +48,11 @@ static void wave_reset(ngtcp2_cc_wave *wave, ngtcp2_conn_stat *cstat) {
 
     // Update CC pacing data
     cstat->pacing_interval_m = (wave->tx_time / wave->default_burst_size) << 10;
-    cstat->send_quantum = wave->default_burst_size;
+    if (wave->default_burst_size > (uint64_t)-1) {
+      cstat->send_quantum = (size_t)-1;
+    } else {
+      cstat->send_quantum = (size_t)wave->default_burst_size;
+    }
     cstat->cwnd = UINT64_MAX;
     cstat->ssthresh = UINT64_MAX;
 
