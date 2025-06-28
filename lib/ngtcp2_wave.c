@@ -63,7 +63,14 @@ void wave_cc_on_pkt_acked(ngtcp2_cc *cc,
                                     ngtcp2_tstamp ts) {
     // When a packet is acknowledged update the related burst_stat structure
     ngtcp2_cc_wave *wave = ngtcp2_struct_of(cc, ngtcp2_cc_wave, cc);
-    burst_stats * current_burst = wave->bursts;
+    burst_stats *current_burst = wave->bursts;
+    burst_stats *next_burst_stat;
+    burst_stats *prev_burst_stat;
+    double ack_train_disp;
+    double alpha;
+    double avg_rtt;
+    double delta_rtt;
+    uint64_t tx_timer_calc;
 
     if (current_burst == NULL) {
         // Error: How can be null if I received an ack for that burst?
@@ -113,25 +120,25 @@ void wave_cc_on_pkt_acked(ngtcp2_cc *cc,
     }
 
     // Compute ack train dispersion
-    double ack_train_disp = 1.0 * (current_burst->last_ack_time -
-                                   current_burst->first_ack_time) *
-                            (1.0 * current_burst->ack_num /
-                            (1.0 * current_burst->ack_num - 1));
+    ack_train_disp = 1.0 * ((double)current_burst->last_ack_time -
+                                   (double)current_burst->first_ack_time) *
+                            (1.0 * (double)current_burst->ack_num /
+                            (1.0 * (double)current_burst->ack_num - 1));
 
     // Compute the EWMA filter parameter
-    double alpha = 1.0 * (current_burst->pilot_rtt - wave->min_rtt) /
-                   (1.0 * current_burst->pilot_rtt);
-    wave->alpha = alpha;
+    alpha = 1.0 * ((double)current_burst->pilot_rtt - (double)wave->min_rtt) /
+                   (1.0 * (double)current_burst->pilot_rtt);
+    wave->alpha = (uint64_t)alpha;
 
     // Computing the average RTT
-    double avg_rtt = alpha * wave->avg_rtt +
-                     (1.0 - alpha) * current_burst->pilot_rtt;
-    wave->avg_rtt = avg_rtt;
+    avg_rtt = alpha * (double)wave->avg_rtt +
+                     (1.0 - alpha) * (double)current_burst->pilot_rtt;
+    wave->avg_rtt = (uint64_t)avg_rtt;
 
     // Compute delta RTT to check if Adjustment mode should be triggered
-    double delta_rtt = wave->avg_rtt - wave->min_rtt;
+    delta_rtt = (double)wave->avg_rtt - (double)wave->min_rtt;
 
-    if (delta_rtt > wave->beta) {
+    if (delta_rtt > (double)wave->beta) {
         // Reset Wave State
         wave->tx_time = 200 * NGTCP2_MILLISECONDS;
         wave->min_rtt = UINT64_MAX;
@@ -160,11 +167,11 @@ void wave_cc_on_pkt_acked(ngtcp2_cc *cc,
     }
 
     // Compute new transmission timer
-    uint64_t tx_timer = (uint64_t) ((ack_train_disp + 0.5 * delta_rtt));
-    if (tx_timer < 1 * NGTCP2_MILLISECONDS) {
+    tx_timer_calc = (uint64_t) ((ack_train_disp + 0.5 * delta_rtt));
+    if (tx_timer_calc < 1 * NGTCP2_MILLISECONDS) {
         wave->tx_time = 1 * NGTCP2_MILLISECONDS;
     } else {
-        wave->tx_time = (tx_timer / 1000000) * 1000000;
+        wave->tx_time = (tx_timer_calc / 1000000) * 1000000;
     }
     cstat->pacing_interval_m = (wave->tx_time / wave->default_burst_size) << 10;
     ngtcp2_log_info(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
@@ -172,22 +179,22 @@ void wave_cc_on_pkt_acked(ngtcp2_cc *cc,
 
 FREE_MEMORY: ;
     // Update the burst list and free memory
-    burst_stats * next = current_burst->next;
-    burst_stats * prev = current_burst->previous;
-    if (prev == NULL && next == NULL) {
+    next_burst_stat = current_burst->next;
+    prev_burst_stat = current_burst->previous;
+    if (prev_burst_stat == NULL && next_burst_stat == NULL) {
         // Current is the only node
         wave->bursts = NULL;
-    } else if (prev == NULL && next != NULL) {
+    } else if (prev_burst_stat == NULL && next_burst_stat != NULL) {
         // Current is the head
-        wave->bursts = next;
-        next->previous = NULL;
-    } else if (prev != NULL && next != NULL) {
+        wave->bursts = next_burst_stat;
+        next_burst_stat->previous = NULL;
+    } else if (prev_burst_stat != NULL && next_burst_stat != NULL) {
         // Current is in the middle
-        prev->next = current_burst->next;
-        next->previous = current_burst->previous;
-    } else if (prev != NULL && next == NULL) {
+        prev_burst_stat->next = current_burst->next;
+        next_burst_stat->previous = current_burst->previous;
+    } else if (prev_burst_stat != NULL && next_burst_stat == NULL) {
         // Current is at the end
-        prev->next = NULL;
+        prev_burst_stat->next = NULL;
     }
     free(current_burst);
 }
@@ -196,6 +203,7 @@ void wave_cc_on_pkt_sent(ngtcp2_cc *cc,
                                    ngtcp2_conn_stat *cstat,
                                    const ngtcp2_cc_pkt *pkt) {
     // When a packet is sent, record the send time of the burst which belongs to
+    (void)cstat;
     ngtcp2_cc_wave *wave = ngtcp2_struct_of(cc, ngtcp2_cc_wave, cc);
     burst_stats * current_burst = wave->bursts;
     if (current_burst == NULL) {
@@ -252,8 +260,13 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
                                    ngtcp2_tstamp ts) {
     // When an ack or a burst of ack is received, update the minimum RTT
     // and trigger the recovery mode
+    (void)ts;
     ngtcp2_cc_wave *wave = ngtcp2_struct_of(cc, ngtcp2_cc_wave, cc);
-    uint64_t tx_timer;
+    uint64_t tx_timer_calc;
+    double alpha;
+    double avg_rtt;
+    double d_rtt;
+    double delta_rtt;
 
     if (ack->bytes_delivered <= 0 || ack->rtt > 10 * wave->min_rtt) {
         // Why an ACK should deliver 0 (or lower) bytes? Ignoring.
@@ -272,19 +285,19 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
         //wave->avg_rtt = (uint64_t) ((1.0 - 0.2) * wave->avg_rtt + 0.2 * ack->rtt);
 
         // Compute the EWMA filter parameter
-        double alpha = 1.0 * (ack->rtt - wave->min_rtt) /
-                       (1.0 * ack->rtt);
-        wave->alpha = alpha;
+        alpha = 1.0 * ((double)ack->rtt - (double)wave->min_rtt) /
+                       (1.0 * (double)ack->rtt);
+        wave->alpha = (uint64_t)alpha;
 
         // Computing the average RTT
-        double avg_rtt = alpha * wave->avg_rtt +
-                         (1.0 - alpha) * ack->rtt;
-        wave->avg_rtt = avg_rtt;
+        avg_rtt = alpha * (double)wave->avg_rtt +
+                         (1.0 - alpha) * (double)ack->rtt;
+        wave->avg_rtt = (uint64_t)avg_rtt;
 
-        double d_rtt = (uint64_t) (ack->rtt - wave->min_rtt);
-        double delta_rtt = (uint64_t) (wave->avg_rtt - wave->min_rtt);
+        d_rtt = (double)(ack->rtt - wave->min_rtt);
+        delta_rtt = (double)(wave->avg_rtt - wave->min_rtt);
 
-        if (delta_rtt > wave->beta) {
+        if (delta_rtt > (double)wave->beta) {
             // Reset Wave State
             wave->tx_time = 200 * NGTCP2_MILLISECONDS;
             wave->min_rtt = UINT64_MAX;
@@ -298,11 +311,11 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
             return;
         }
         // Recovery Mode Transmission Timer
-        tx_timer = (uint64_t) (0.4 * wave->tx_time + 0.2 * d_rtt);
-        if (tx_timer < 1 * NGTCP2_MILLISECONDS) {
+        tx_timer_calc = (uint64_t) (0.4 * (double)wave->tx_time + 0.2 * d_rtt);
+        if (tx_timer_calc < 1 * NGTCP2_MILLISECONDS) {
             wave->tx_time = 1 * NGTCP2_MILLISECONDS;
         } else {
-            wave->tx_time = (tx_timer / 1000000) * 1000000;
+            wave->tx_time = (tx_timer_calc / 1000000) * 1000000;
         }
         cstat->pacing_interval_m = (wave->tx_time / wave->default_burst_size) << 10;
 
@@ -313,6 +326,7 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
 
 void wave_cc_reset(ngtcp2_cc *cc, ngtcp2_conn_stat *cstat,
                              ngtcp2_tstamp ts) {
+    (void)ts;
     ngtcp2_cc_wave *wave = ngtcp2_struct_of(cc, ngtcp2_cc_wave, cc);
     wave_reset(wave, cstat);
 }
