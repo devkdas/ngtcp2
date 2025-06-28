@@ -203,9 +203,10 @@ void wave_cc_on_pkt_sent(ngtcp2_cc *cc,
                                    ngtcp2_conn_stat *cstat,
                                    const ngtcp2_cc_pkt *pkt) {
     // When a packet is sent, record the send time of the burst which belongs to
-    (void)cstat;
     ngtcp2_cc_wave *wave = ngtcp2_struct_of(cc, ngtcp2_cc_wave, cc);
     burst_stats * current_burst = wave->bursts;
+    (void)cstat;
+
     if (current_burst == NULL) {
         // Init the stats if this is the first bust that was sent
         current_burst = malloc(sizeof(burst_stats));
@@ -260,13 +261,13 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
                                    ngtcp2_tstamp ts) {
     // When an ack or a burst of ack is received, update the minimum RTT
     // and trigger the recovery mode
-    (void)ts;
     ngtcp2_cc_wave *wave = ngtcp2_struct_of(cc, ngtcp2_cc_wave, cc);
     uint64_t tx_timer_calc;
     double alpha;
     double avg_rtt;
     double d_rtt;
     double delta_rtt;
+    (void)ts;
 
     if (ack->bytes_delivered <= 0 || ack->rtt > 10 * wave->min_rtt) {
         // Why an ACK should deliver 0 (or lower) bytes? Ignoring.
@@ -326,8 +327,8 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
 
 void wave_cc_reset(ngtcp2_cc *cc, ngtcp2_conn_stat *cstat,
                              ngtcp2_tstamp ts) {
-    (void)ts;
     ngtcp2_cc_wave *wave = ngtcp2_struct_of(cc, ngtcp2_cc_wave, cc);
+    (void)ts;
     wave_reset(wave, cstat);
 }
 
