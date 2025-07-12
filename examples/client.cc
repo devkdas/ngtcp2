@@ -2194,10 +2194,10 @@ int http_recv_settings(nghttp3_conn *conn, const nghttp3_settings *settings,
 } // namespace
 
 namespace {
-int http_recv_origin(nghttp3_conn *conn, const uint8_t *origin,
-                     size_t originlen, void *conn_user_data) {
+int http_recv_origin(nghttp3_conn *conn, const nghttp3_cvec *origin,
+                     void *conn_user_data) {
   if (!config.quiet) {
-    debug::print_http_origin(origin, originlen);
+    debug::print_http_origin(origin->base, origin->len);
   }
 
   return 0;
@@ -2240,7 +2240,6 @@ int Client::setup_httpconn() {
     .recv_settings = ::http_recv_settings,
     .recv_origin = ::http_recv_origin,
     .end_origin = ::http_end_origin,
-    .rand = rand_bytes,
   };
   nghttp3_settings settings;
   nghttp3_settings_default(&settings);
