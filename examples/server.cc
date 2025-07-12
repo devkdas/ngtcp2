@@ -1273,14 +1273,13 @@ int Handler::setup_httpconn() {
     .end_stream = ::http_end_stream,
     .reset_stream = ::http_reset_stream,
     .recv_settings = ::http_recv_settings,
-    .rand = rand_bytes,
   };
   nghttp3_settings settings;
   nghttp3_settings_default(&settings);
   settings.qpack_max_dtable_capacity = 4096;
   settings.qpack_blocked_streams = 100;
 
-  nghttp3_vec origin_list;
+  nghttp3_cvec origin_list;
 
   if (config.origin_list) {
     origin_list.base = config.origin_list->data();
