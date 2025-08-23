@@ -16865,6 +16865,36 @@ void test_ngtcp2_conn_write_aggregate_pkt(void) {
   assert_size(0, ==, ud.write_pkt.num_write_left);
 
   ngtcp2_conn_del(conn);
+
+  /* Pass the buffer of the minimum size */
+  opt = (conn_options){
+    .user_data = &ud,
+  };
+
+  setup_default_client_with_options(&conn, opt);
+  ngtcp2_path_storage_zero(&ps);
+  memset(&pi, 0, sizeof(pi));
+
+  rv = ngtcp2_conn_open_bidi_stream(conn, &stream_id, NULL);
+
+  assert_int(0, ==, rv);
+
+  ud.write_pkt.stream_id = stream_id;
+  ud.write_pkt.num_write_left = 10;
+
+  spktlen = ngtcp2_conn_write_aggregate_pkt(
+    conn, &ps.path, &pi, buf,
+    ngtcp2_conn_get_path_max_tx_udp_payload_size(conn), &gsolen, write_pkt, t);
+
+  assert_ptrdiff(
+    (ngtcp2_ssize)ngtcp2_conn_get_path_max_tx_udp_payload_size(conn), ==,
+    spktlen);
+  assert_size(ngtcp2_conn_get_path_max_tx_udp_payload_size(conn), ==, gsolen);
+  assert_true(ngtcp2_path_eq(&null_path.path, &ps.path));
+  assert_uint8(NGTCP2_ECN_ECT_0, ==, pi.ecn);
+  assert_size(9, ==, ud.write_pkt.num_write_left);
+
+  ngtcp2_conn_del(conn);
 }
 
 void test_ngtcp2_conn_crumble_initial_pkt(void) {
@@ -16886,6 +16916,7 @@ void test_ngtcp2_conn_crumble_initial_pkt(void) {
   ngtcp2_rtb_entry *ent;
   ngtcp2_callbacks callbacks;
   conn_options opts;
+  uint8_t *end_data;
 
   ngtcp2_buf_init(&tls_buf, tls_rawbuf, sizeof(tls_rawbuf));
 
@@ -16987,6 +17018,31 @@ void test_ngtcp2_conn_crumble_initial_pkt(void) {
   assert_ssize(0, <, spktlen);
   assert_size(2, ==, ngtcp2_ksl_len(conn->in_pktns->crypto.strm.tx.streamfrq));
 
+  it = ngtcp2_rtb_head(&conn->in_pktns->rtb);
+
+  ent = ngtcp2_ksl_it_get(&it);
+  frc = ent->frc;
+
+  /* This is the data before the removed data. */
+  assert_uint64(NGTCP2_FRAME_CRYPTO, ==, frc->fr.type);
+  assert_uint64(0, ==, frc->fr.stream.offset);
+  assert_size(1, ==, frc->fr.stream.datacnt);
+  assert_size(341, ==, frc->fr.stream.data[0].len);
+  assert_not_null(frc->next);
+
+  end_data = ngtcp2_vec_end(&frc->fr.stream.data[0]);
+
+  frc = frc->next;
+
+  /* This is the data after the removed data. */
+  assert_uint64(NGTCP2_FRAME_CRYPTO, ==, frc->fr.type);
+  assert_uint64(ngtcp2_buf_len(&tls_buf) - 1, ==, frc->fr.stream.offset);
+  assert_size(2, ==, frc->fr.stream.datacnt);
+  assert_size(1, ==, frc->fr.stream.data[0].len);
+  assert_ptr_equal(end_data + 4, frc->fr.stream.data[0].base);
+  assert_size(735, ==, frc->fr.stream.data[1].len);
+  assert_null(frc->next);
+
   slen = ngtcp2_pkt_decode_hd_long(&hd, buf, (size_t)spktlen);
 
   assert_ptrdiff(0, <, slen);
@@ -17018,6 +17074,27 @@ void test_ngtcp2_conn_crumble_initial_pkt(void) {
   spktlen = ngtcp2_conn_write_pkt(conn, NULL, NULL, buf, sizeof(buf), ++t);
 
   assert_ssize(0, <, spktlen);
+
+  it = ngtcp2_rtb_head(&conn->in_pktns->rtb);
+
+  ent = ngtcp2_ksl_it_get(&it);
+  frc = ent->frc;
+
+  /* This is the portion of removed data. */
+  assert_uint64(NGTCP2_FRAME_CRYPTO, ==, frc->fr.type);
+  assert_uint64(341, ==, frc->fr.stream.offset);
+  assert_size(1, ==, frc->fr.stream.datacnt);
+  assert_size(4, ==, frc->fr.stream.data[0].len);
+  assert_ptr_equal(end_data, frc->fr.stream.data[0].base);
+  assert_not_null(frc->next);
+
+  frc = frc->next;
+
+  assert_uint64(NGTCP2_FRAME_CRYPTO, ==, frc->fr.type);
+  assert_uint64(ngtcp2_buf_len(&tls_buf) + 735, ==, frc->fr.stream.offset);
+  assert_size(1, ==, frc->fr.stream.datacnt);
+  assert_size(1022, ==, frc->fr.stream.data[0].len);
+  assert_null(frc->next);
 
   slen = ngtcp2_pkt_decode_hd_long(&hd, buf, (size_t)spktlen);
 
@@ -17099,11 +17176,14 @@ void test_ngtcp2_conn_crumble_initial_pkt(void) {
   ent = ngtcp2_ksl_it_get(&it);
   frc = ent->frc;
 
+  /* This is the data before the removed data. */
   assert_uint64(NGTCP2_FRAME_CRYPTO, ==, frc->fr.type);
   assert_uint64(0, ==, frc->fr.stream.offset);
   assert_size(1, ==, frc->fr.stream.datacnt);
-  assert_size(ngtcp2_buf_len(&tls_buf) - 1, ==, frc->fr.stream.data[0].len);
+  assert_size(341, ==, frc->fr.stream.data[0].len);
   assert_not_null(frc->next);
+
+  end_data = ngtcp2_vec_end(&frc->fr.stream.data[0]);
 
   frc = frc->next;
 
@@ -17112,6 +17192,7 @@ void test_ngtcp2_conn_crumble_initial_pkt(void) {
   assert_uint64(ngtcp2_buf_len(&tls_buf) - 1, ==, frc->fr.stream.offset);
   assert_size(1, ==, frc->fr.stream.datacnt);
   assert_size(1, ==, frc->fr.stream.data[0].len);
+  assert_ptr_equal(end_data + 4, frc->fr.stream.data[0].base);
   assert_not_null(frc->next);
 
   frc = frc->next;
@@ -17121,6 +17202,7 @@ void test_ngtcp2_conn_crumble_initial_pkt(void) {
   assert_uint64(341, ==, frc->fr.stream.offset);
   assert_size(1, ==, frc->fr.stream.datacnt);
   assert_size(4, ==, frc->fr.stream.data[0].len);
+  assert_ptr_equal(end_data, frc->fr.stream.data[0].base);
   assert_not_null(frc->next);
 
   frc = frc->next;
