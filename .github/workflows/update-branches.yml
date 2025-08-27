@@ -57,9 +57,17 @@ jobs:
             # Attempt rebase
             if git rebase upstream/${UPSTREAM_DEFAULT_BRANCH}; then
               echo "Rebase successful for $branch."
-              echo "Pushing $branch to origin with force..."
-              git push origin $branch --force
-              echo "$branch updated and pushed successfully."
+              
+              # Check for workflow changes
+              if git diff --name-only HEAD@{1} HEAD | grep -q "^\.github/workflows/"; then
+                echo "Workflow files were modified in this rebase. Skipping push to avoid permission errors."
+                # We still want to keep the rebased branch locally, so we don't need to do anything else here.
+                # The next 'git checkout' will switch to the next branch.
+              else
+                echo "No workflow changes detected. Pushing $branch to origin with force..."
+                git push origin $branch --force
+                echo "$branch updated and pushed successfully."
+              fi
             else
               echo "Rebase failed for $branch. Aborting rebase and skipping push for this branch."
               echo "You may need to resolve conflicts manually for $branch."
