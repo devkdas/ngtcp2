@@ -5,6 +5,9 @@ on:
     - cron: "0 0 * * *" # Run once every 24 hours at midnight UTC
   workflow_dispatch: # Allows manual triggering
 
+permissions:
+  contents: write
+
 jobs:
   update-all-branches:
     runs-on: ubuntu-latest
@@ -51,18 +54,17 @@ jobs:
             echo "--- Processing branch: $branch ---"
             git checkout $branch
             
-            echo "Current HEAD is $(git rev-parse HEAD)"
+            BEFORE_REBASE_SHA=$(git rev-parse HEAD)
+            echo "Current HEAD is $BEFORE_REBASE_SHA"
             echo "Attempting to rebase $branch onto upstream/${UPSTREAM_DEFAULT_BRANCH}..."
             
             # Attempt rebase
             if git rebase upstream/${UPSTREAM_DEFAULT_BRANCH}; then
               echo "Rebase successful for $branch."
               
-              # Check for workflow changes
-              if git diff --name-only HEAD@{1} HEAD | grep -q "^\.github/workflows/"; then
+              # Check for workflow changes using a more robust method
+              if git diff --name-only $BEFORE_REBASE_SHA HEAD | grep -q "^\.github/workflows/"; then
                 echo "Workflow files were modified in this rebase. Skipping push to avoid permission errors."
-                # We still want to keep the rebased branch locally, so we don't need to do anything else here.
-                # The next 'git checkout' will switch to the next branch.
               else
                 echo "No workflow changes detected. Pushing $branch to origin with force..."
                 git push origin $branch --force
