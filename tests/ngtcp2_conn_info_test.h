@@ -1,7 +1,7 @@
 /*
  * ngtcp2
  *
- * Copyright (c) 2024 ngtcp2 contributors
+ * Copyright (c) 2025 ngtcp2 contributors
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -22,30 +22,19 @@
  * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#ifndef TLS_SHARED_BORINGSSL_H
-#define TLS_SHARED_BORINGSSL_H
+#ifndef NGTCP2_CONN_INFO_TEST_H
+#define NGTCP2_CONN_INFO_TEST_H
 
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
-#endif // defined(HAVE_CONFIG_H)
+#endif /* defined(HAVE_CONFIG_H) */
 
-#include <openssl/ssl.h>
+#define MUNIT_ENABLE_ASSERT_ALIASES
 
-namespace ngtcp2 {
+#include "munit.h"
 
-namespace tls {
+extern const MunitSuite conn_info_suite;
 
-inline constexpr uint16_t CERTIFICATE_COMPRESSION_ALGO_BROTLI = 2;
+munit_void_test_decl(test_ngtcp2_conn_info_init)
 
-#ifdef HAVE_LIBBROTLI
-int cert_compress(SSL *ssl, CBB *out, const uint8_t *in, size_t in_len);
-
-int cert_decompress(SSL *ssl, CRYPTO_BUFFER **out, size_t uncompressed_len,
-                    const uint8_t *in, size_t in_len);
-#endif // defined(HAVE_LIBBROTLI)
-
-} // namespace tls
-
-} // namespace ngtcp2
-
-#endif // !defined(TLS_SHARED_BORINGSSL_H)
+#endif /* !defined(NGTCP2_CONN_INFO_TEST_H) */
