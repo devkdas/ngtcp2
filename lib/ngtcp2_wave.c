@@ -25,6 +25,7 @@
 #include "ngtcp2_wave.h"
 
 #include <string.h>
+#include <inttypes.h>
 
 #include "ngtcp2_log.h"
 #include "ngtcp2_macro.h"
@@ -56,9 +57,9 @@ static void wave_reset(ngtcp2_cc_wave *wave, ngtcp2_conn_stat *cstat) {
     cstat->cwnd = UINT64_MAX;
     cstat->ssthresh = UINT64_MAX;
 
-    ngtcp2_log_info(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
-                    "Wave state set to default values. Tx time=",
-                    wave->tx_time);
+    ngtcp2_log_infof(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
+                     "Wave state set to default values. Tx time=%" PRIu64,
+                     wave->tx_time);
 }
 
 void wave_cc_on_pkt_acked(ngtcp2_cc *cc,
@@ -178,8 +179,9 @@ void wave_cc_on_pkt_acked(ngtcp2_cc *cc,
         wave->tx_time = (tx_timer_calc / 1000000) * 1000000;
     }
     cstat->pacing_interval_m = (wave->tx_time / wave->default_burst_size) << 10;
-    ngtcp2_log_info(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
-                    "New Wave Tx time=", wave->tx_time);
+    ngtcp2_log_infof(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
+                     "New Wave Tx time=%" PRIu64,
+                     wave->tx_time);
 
 FREE_MEMORY: ;
     // Update the burst list and free memory
@@ -324,8 +326,9 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
         }
         cstat->pacing_interval_m = (wave->tx_time / wave->default_burst_size) << 10;
 
-        ngtcp2_log_info(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
-                        "New Wave Tx time=", wave->tx_time);
+        ngtcp2_log_infof(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
+                         "New Wave Tx time=%" PRIu64,
+                         wave->tx_time);
     }
 }
 
