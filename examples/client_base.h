@@ -196,6 +196,15 @@ struct Config {
   // ech_config_list_file is a path to a file to read and write
   // ECHConfigList.
   const char *ech_config_list_file;
+  // no_gso disables GSO.
+  bool no_gso;
+  // show_stat, if true, displays the connection statistics when the
+  // connection is closed.
+  bool show_stat;
+  // gso_burst is the number of packets to aggregate in GSO.  0 means
+  // it is not limited by the configuration.
+  size_t gso_burst;
+  // client_ip is the client IP address to use.
   std::string client_ip;
 };
 
