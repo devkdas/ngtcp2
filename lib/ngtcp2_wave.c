@@ -128,19 +128,16 @@ void wave_cc_on_pkt_acked(ngtcp2_cc *cc,
     ack_train_disp = 1.0 * ((double)current_burst->last_ack_time -
                                    (double)current_burst->first_ack_time) *
                             (1.0 * (double)current_burst->ack_num /
-                            (1.0 * (double)current_burst->ack_num - 1));
+                             (double)current_burst->send_burst_size);
 
-    // Compute the EWMA filter parameter
+    // Compute moving average over the RTT
     alpha = 1.0 * ((double)current_burst->pilot_rtt - (double)wave->min_rtt) /
                    (1.0 * (double)current_burst->pilot_rtt);
-    wave->alpha = (uint64_t)alpha;
-
-    // Computing the average RTT
-    avg_rtt = alpha * (double)wave->avg_rtt +
-                     (1.0 - alpha) * (double)current_burst->pilot_rtt;
+    avg_rtt = (1.0 - alpha) * (double)wave->avg_rtt +
+                     alpha * (double)current_burst->pilot_rtt;
     wave->avg_rtt = (uint64_t)avg_rtt;
 
-    // Compute delta RTT to check if Adjustment mode should be triggered
+    // Check if I should enter Adjustment Mode
     delta_rtt = (double)wave->avg_rtt - (double)wave->min_rtt;
 
     if (delta_rtt > (double)wave->beta) {
@@ -175,25 +172,27 @@ void wave_cc_on_pkt_acked(ngtcp2_cc *cc,
     tx_timer_calc = (uint64_t) ((ack_train_disp + 0.5 * delta_rtt));
     if (tx_timer_calc < 1 * NGTCP2_MILLISECONDS) {
         wave->tx_time = 1 * NGTCP2_MILLISECONDS;
+    } else if (tx_timer_calc > 1000 * NGTCP2_MILLISECONDS) {
+        wave->tx_time = 1000 * NGTCP2_MILLISECONDS;
     } else {
-        wave->tx_time = (tx_timer_calc / 1000000) * 1000000;
+        wave->tx_time = tx_timer_calc;
     }
-    cstat->pacing_interval_m = (wave->tx_time / wave->default_burst_size) << 10;
-    ngtcp2_log_infof(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
-                     "New Wave Tx time=%" PRIu64,
-                     wave->tx_time);
 
-FREE_MEMORY: ;
-    // Update the burst list and free memory
+    // Update the pacing interval and related cc-stat variables
+    cstat->pacing_interval_m = (wave->tx_time / wave->default_burst_size) << 10;
+
+    // Remove the burst from the list.
+    // Because wave->burst is pointing to current_burst, when I free it I need to
+    // update the pointer pointing to the next element in the list
     next_burst_stat = current_burst->next;
     prev_burst_stat = current_burst->previous;
-    if (prev_burst_stat == NULL && next_burst_stat == NULL) {
-        // Current is the only node
-        wave->bursts = NULL;
-    } else if (prev_burst_stat == NULL && next_burst_stat != NULL) {
-        // Current is the head
-        wave->bursts = next_burst_stat;
+    wave->bursts = next_burst_stat;
+    if (next_burst_stat != NULL && prev_burst_stat == NULL) {
+        // Current is at the beginning
         next_burst_stat->previous = NULL;
+    } else if (prev_burst_stat != NULL && next_burst_stat == NULL) {
+        // Current is at the end
+        prev_burst_stat->next = NULL;
     } else if (prev_burst_stat != NULL && next_burst_stat != NULL) {
         // Current is in the middle
         prev_burst_stat->next = current_burst->next;
@@ -202,7 +201,9 @@ FREE_MEMORY: ;
         // Current is at the end
         prev_burst_stat->next = NULL;
     }
+
     free(current_burst);
+FREE_MEMORY: ;
 }
 
 void wave_cc_on_pkt_sent(ngtcp2_cc *cc,
@@ -296,12 +297,14 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
                        (1.0 * (double)ack->rtt);
         wave->alpha = (uint64_t)alpha;
 
-        // Computing the average RTT
-        avg_rtt = alpha * (double)wave->avg_rtt +
-                         (1.0 - alpha) * (double)ack->rtt;
+        // Compute EWMA average over RTT
+        avg_rtt = (1.0 - alpha) * (double)wave->avg_rtt + alpha * (double)ack->rtt;
         wave->avg_rtt = (uint64_t)avg_rtt;
 
-        d_rtt = (double)(ack->rtt - wave->min_rtt);
+        // Compute RTT difference
+        d_rtt = (double)ack->rtt - (double)wave->avg_rtt;
+
+        // Compute delta RTT
         delta_rtt = (double)(wave->avg_rtt - wave->min_rtt);
 
         if (delta_rtt > (double)wave->beta) {
@@ -321,10 +324,11 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc,
         tx_timer_calc = (uint64_t) (0.4 * (double)wave->tx_time + 0.2 * d_rtt);
         if (tx_timer_calc < 1 * NGTCP2_MILLISECONDS) {
             wave->tx_time = 1 * NGTCP2_MILLISECONDS;
+        } else if (tx_timer_calc > 1000 * NGTCP2_MILLISECONDS) {
+            wave->tx_time = 1000 * NGTCP2_MILLISECONDS;
         } else {
-            wave->tx_time = (tx_timer_calc / 1000000) * 1000000;
+            wave->tx_time = tx_timer_calc;
         }
-        cstat->pacing_interval_m = (wave->tx_time / wave->default_burst_size) << 10;
 
         ngtcp2_log_infof(wave->cc.log, NGTCP2_LOG_EVENT_CCA,
                          "New Wave Tx time=%" PRIu64,
