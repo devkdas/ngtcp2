@@ -74,7 +74,6 @@ void wave_cc_on_ack_recv(ngtcp2_cc *cc, ngtcp2_conn_stat *cstat,
                          const ngtcp2_cc_ack *ack, ngtcp2_tstamp ts);
 
 void wave_cc_reset(ngtcp2_cc *cc, ngtcp2_conn_stat *cstat, ngtcp2_tstamp ts);
-
 void ngtcp2_cc_wave_init(ngtcp2_cc_wave *cc,
                          ngtcp2_log *log,
                          ngtcp2_conn_stat *cstat);
