@@ -159,6 +159,14 @@ typedef struct ngtcp2_conn_stat {
    * lost, excluding PMTUD packets.
    */
   uint64_t bytes_lost;
+  /*
+   * ping_recv is the number of PING frames received.
+   */
+  uint64_t ping_recv;
+  /*
+   * pkt_discarded is the number of QUIC packets discarded.
+   */
+  uint64_t pkt_discarded;
 } ngtcp2_conn_stat;
 
 #endif /* !defined(NGTCP2_CONN_STAT_H) */

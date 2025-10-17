@@ -319,10 +319,7 @@ void timeoutcb(struct ev_loop *loop, ev_timer *w, int revents) {
     goto fail;
   }
 
-  rv = h->on_write();
-  if (rv != 0) {
-    goto fail;
-  }
+  h->signal_write();
 
   return;
 
@@ -346,7 +343,7 @@ Handler::Handler(struct ev_loop *loop, Server *server)
     nkey_update_(0),
     no_gso_{
 #ifdef UDP_SEGMENT
-      false
+      config.no_gso
 #else  // !defined(UDP_SEGMENT)
       true
 #endif // !defined(UDP_SEGMENT)
@@ -1031,15 +1028,18 @@ int Handler::write_streams() {
   size_t gso_size;
   auto ts = util::timestamp();
   auto txbuf = std::span{tx_.data.get(), NGTCP2_TX_BUFLEN};
+  auto buflen = util::clamp_buffer_size(conn_, txbuf.size(), config.gso_burst);
 
   ngtcp2_path_storage_zero(&ps);
 
-  auto nwrite =
-    ngtcp2_conn_write_aggregate_pkt(conn_, &ps.path, &pi, txbuf.data(),
-                                    txbuf.size(), &gso_size, ::write_pkt, ts);
+  auto nwrite = ngtcp2_conn_write_aggregate_pkt2(
+    conn_, &ps.path, &pi, txbuf.data(), buflen, &gso_size, ::write_pkt,
+    config.gso_burst, ts);
   if (nwrite < 0) {
     return handle_error();
   }
+
+  ngtcp2_conn_update_pkt_tx_time(conn_, ts);
 
   if (nwrite == 0) {
     return 0;
@@ -1593,6 +1593,7 @@ int add_endpoint(std::vector<Endpoint> &endpoints, const char *addr,
   ep.addr = dest;
   ep.fd = fd;
   ev_io_init(&ep.rev, sreadcb, 0, EV_READ);
+  ev_set_priority(&ep.rev, EV_MAXPRI);
 
   return 0;
 }
@@ -1650,6 +1651,7 @@ int add_endpoint(std::vector<Endpoint> &endpoints, const Address &addr) {
   ep.addr = addr;
   ep.fd = fd;
   ev_io_init(&ep.rev, sreadcb, 0, EV_READ);
+  ev_set_priority(&ep.rev, EV_MAXPRI);
 
   return 0;
 }
@@ -1715,7 +1717,14 @@ int Server::on_read(const Endpoint &ep) {
     .msg_control = msg_ctrl,
   };
 
-  for (; pktcnt < 10;) {
+  auto start = util::timestamp();
+
+  for (; pktcnt < MAX_RECV_PKTS;) {
+    if (util::recv_pkt_time_threshold_exceeded(
+          config.cc_algo == NGTCP2_CC_ALGO_BBR, start, pktcnt)) {
+      return 0;
+    }
+
     msg.msg_namelen = sizeof(su);
     msg.msg_controllen = sizeof(msg_ctrl);
 
@@ -2776,12 +2785,21 @@ Options:
               Specify UDP datagram payload sizes  to probe in Path MTU
               Discovery.  <SIZE> must be strictly larger than 1200.
   --ech-config-file=<PATH>
-              Read private  key and  ECHConfig from |PATH|.   The file
-              denoted by |PATH| must contain private key and ECHConfig
+              Read private  key and  ECHConfig from <PATH>.   The file
+              denoted by <PATH> must contain private key and ECHConfig
               as                      described                     in
               https://datatracker.ietf.org/doc/html/draft-farrell-tls-pemesni.
               ECH configuration  is only applied if  an underlying TLS
               stack supports it.
+  --no-gso    Disables GSO.
+  --show-stat Print the connection statistics when the connection is
+              closed.
+  --gso-burst=<N>
+              The maximum number of packets  to aggregate for GSO.  If
+              GSO is disabled,  this is the maximum  number of packets
+              to send  per an event  loop in a single  connection.  It
+              defaults  to 0,  which means  it is  not limited  by the
+              configuration.
   -h, --help  Display this help and exit.
 
 ---
@@ -2854,6 +2872,9 @@ int main(int argc, char **argv) {
       {"initial-pkt-num", required_argument, &flag, 31},
       {"pmtud-probes", required_argument, &flag, 32},
       {"ech-config-file", required_argument, &flag, 33},
+      {"no-gso", no_argument, &flag, 35},
+      {"show-stat", no_argument, &flag, 36},
+      {"gso-burst", required_argument, &flag, 37},
       {},
     };
 
@@ -3060,9 +3081,9 @@ int main(int argc, char **argv) {
         if (auto n = util::parse_uint_iec(optarg); !n) {
           std::cerr << "max-udp-payload-size: invalid argument" << std::endl;
           exit(EXIT_FAILURE);
-        } else if (*n > 64_k) {
-          std::cerr << "max-udp-payload-size: must not exceed 65536"
-                    << std::endl;
+        } else if (*n > NGTCP2_MAX_TX_UDP_PAYLOAD_SIZE) {
+          std::cerr << "max-udp-payload-size: must not exceed "
+                    << NGTCP2_MAX_TX_UDP_PAYLOAD_SIZE << std::endl;
           exit(EXIT_FAILURE);
         } else {
           config.max_udp_payload_size = *n;
@@ -3192,10 +3213,12 @@ int main(int argc, char **argv) {
           if (auto n = util::parse_uint_iec(s); !n) {
             std::cerr << "pmtud-probes: invalid argument" << std::endl;
             exit(EXIT_FAILURE);
-          } else if (*n <= 1200 || *n >= 64_k) {
-            std::cerr
-              << "pmtud-probes: must be in range [1201, 65535], inclusive."
-              << std::endl;
+          } else if (*n <= NGTCP2_MAX_UDP_PAYLOAD_SIZE ||
+                     *n > NGTCP2_MAX_TX_UDP_PAYLOAD_SIZE) {
+            std::cerr << "pmtud-probes: must be in range ["
+                      << NGTCP2_MAX_UDP_PAYLOAD_SIZE + 1 << ", "
+                      << NGTCP2_MAX_TX_UDP_PAYLOAD_SIZE << "], inclusive."
+                      << std::endl;
             exit(EXIT_FAILURE);
           } else {
             config.pmtud_probes.push_back(static_cast<uint16_t>(*n));
@@ -3207,11 +3230,37 @@ int main(int argc, char **argv) {
         // --ech-config-file
         ech_config_file = optarg;
         break;
+      case 35:
+        // --no-gso
+        config.no_gso = true;
+        break;
+      case 36:
+        // --show-stat
+        config.show_stat = true;
+        break;
+      case 37: {
+        // --gso-burst
+        auto n = util::parse_uint(optarg);
+        if (!n) {
+          std::cerr << "gso-burst: invalid argument" << std::endl;
+          exit(EXIT_FAILURE);
+        }
+
+        if (*n > 64) {
+          std::cerr << "gso-burst: must be in range [0, 64], inclusive."
+                    << std::endl;
+          exit(EXIT_FAILURE);
+        }
+
+        config.gso_burst = static_cast<size_t>(*n);
+
+        break;
+      }
       }
       break;
     default:
       break;
-    };
+    }
   }
 
   if (argc - optind < 4) {

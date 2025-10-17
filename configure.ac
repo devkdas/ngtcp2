@@ -22,7 +22,7 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 # WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 AC_PREREQ(2.61)
-AC_INIT([ngtcp2], [1.16.0-DEV], [t-tujikawa@users.sourceforge.net])
+AC_INIT([ngtcp2], [1.18.0-DEV], [t-tujikawa@users.sourceforge.net])
 AC_CONFIG_AUX_DIR([.])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_HEADERS([config.h])
@@ -41,9 +41,9 @@ m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
 # See versioning rule:
 #  https://www.gnu.org/software/libtool/manual/html_node/Updating-version-info.html
-AC_SUBST(LT_CURRENT, 21)
+AC_SUBST(LT_CURRENT, 23)
 AC_SUBST(LT_REVISION, 0)
-AC_SUBST(LT_AGE, 5)
+AC_SUBST(LT_AGE, 7)
 
 AC_SUBST(CRYPTO_QUICTLS_LT_CURRENT, 5)
 AC_SUBST(CRYPTO_QUICTLS_LT_REVISION, 0)
@@ -210,7 +210,8 @@ have_vanilla_openssl=no
 have_quictls=no
 have_libressl=no
 have_ossl=no
-if test "x${request_openssl}" != "xno"; then
+if test "x${request_openssl}" != "xno" ||
+   test "x${request_picotls}" = "xyes"; then
   PKG_CHECK_MODULES([OPENSSL], [openssl >= 1.1.1],
                     [have_openssl=yes], [have_openssl=no])
   if test "x${have_openssl}" = "xno"; then
@@ -222,76 +223,79 @@ if test "x${request_openssl}" != "xno"; then
 
     AC_SUBST(VANILLA_OPENSSL_LIBS)
     AC_SUBST(VANILLA_OPENSSL_CFLAGS)
+  fi
+fi
 
-    # Until OpenSSL gains mainline support for QUIC, check for a
-    # patched version.
+if test "x${request_openssl}" != "xno" &&
+   test "x${have_openssl}" = "xyes"; then
+  # Until OpenSSL gains mainline support for QUIC, check for a
+  # patched version.
 
+  save_CFLAGS="$CFLAGS"
+  save_LIBS="$LIBS"
+  CFLAGS="$OPENSSL_CFLAGS $CFLAGS"
+  LIBS="$OPENSSL_LIBS $LIBS"
+
+  AC_MSG_CHECKING([for SSL_provide_quic_data])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+    #include <openssl/ssl.h>
+    #if defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_IS_AWSLC)
+    #  error This is boringssl.
+    #endif /* OPENSSL_IS_BORINGSSL || OPENSSL_IS_AWSLC */
+  ]], [[
+    SSL_provide_quic_data(NULL, 0, NULL, 0);
+  ]])],
+  [AC_MSG_RESULT([yes]); have_quictls=yes],
+  [AC_MSG_RESULT([no]); have_quictls=no])
+
+  CFLAGS="$save_CFLAGS"
+  LIBS="$save_LIBS"
+
+  if test "x${have_quictls}" = "xno"; then
     save_CFLAGS="$CFLAGS"
     save_LIBS="$LIBS"
     CFLAGS="$OPENSSL_CFLAGS $CFLAGS"
     LIBS="$OPENSSL_LIBS $LIBS"
 
-    AC_MSG_CHECKING([for SSL_provide_quic_data])
+    AC_MSG_CHECKING([for SSL_set_quic_tls_cbs])
     AC_LINK_IFELSE([AC_LANG_PROGRAM([[
       #include <openssl/ssl.h>
-      #if defined(OPENSSL_IS_BORINGSSL) || defined(OPENSSL_IS_AWSLC)
-      #  error This is boringssl.
-      #endif /* OPENSSL_IS_BORINGSSL || OPENSSL_IS_AWSLC */
     ]], [[
-      SSL_provide_quic_data(NULL, 0, NULL, 0);
+      SSL_set_quic_tls_cbs(NULL, NULL, NULL);
     ]])],
-    [AC_MSG_RESULT([yes]); have_quictls=yes],
-    [AC_MSG_RESULT([no]); have_quictls=no])
+    [AC_MSG_RESULT([yes]); have_ossl=yes],
+    [AC_MSG_RESULT([no]); have_ossl=no])
 
     CFLAGS="$save_CFLAGS"
     LIBS="$save_LIBS"
 
-    if test "x${have_quictls}" = "xno"; then
-      save_CFLAGS="$CFLAGS"
-      save_LIBS="$LIBS"
-      CFLAGS="$OPENSSL_CFLAGS $CFLAGS"
-      LIBS="$OPENSSL_LIBS $LIBS"
-
-      AC_MSG_CHECKING([for SSL_set_quic_tls_cbs])
-      AC_LINK_IFELSE([AC_LANG_PROGRAM([[
-        #include <openssl/ssl.h>
-      ]], [[
-        SSL_set_quic_tls_cbs(NULL, NULL, NULL);
-      ]])],
-      [AC_MSG_RESULT([yes]); have_ossl=yes],
-      [AC_MSG_RESULT([no]); have_ossl=no])
-
-      CFLAGS="$save_CFLAGS"
-      LIBS="$save_LIBS"
-
-      if test "x${have_ossl}" = "xno"; then
-        AC_MSG_NOTICE([openssl does not have QUIC interface, disabling it])
-        have_openssl=no
-        OPENSSL_LIBS=
-        OPENSSL_CFLAGS=
-      fi
-    else
-      save_CFLAGS="$CFLAGS"
-      save_LIBS="$LIBS"
-      CFLAGS="$OPENSSL_CFLAGS $CFLAGS"
-      LIBS="$OPENSSL_LIBS $LIBS"
-
-      AC_MSG_CHECKING([for LIBRESSL_VERSION_NUMBER])
-      AC_LINK_IFELSE([AC_LANG_PROGRAM([[
-        #include <openssl/opensslv.h>
-      ]], [[
-        int dummy = LIBRESSL_VERSION_NUMBER;
-        (void)dummy;
-      ]])],
-      [AC_MSG_RESULT([yes]); have_libressl=yes],
-      [AC_MSG_RESULT([no]); have_libressl=no])
-      if test "x${have_libressl}" = "xyes"; then
-        have_quictls=no
-      fi
-
-      CFLAGS="$save_CFLAGS"
-      LIBS="$save_LIBS"
+    if test "x${have_ossl}" = "xno"; then
+      AC_MSG_NOTICE([openssl does not have QUIC interface, disabling it])
+      have_openssl=no
+      OPENSSL_LIBS=
+      OPENSSL_CFLAGS=
     fi
+  else
+    save_CFLAGS="$CFLAGS"
+    save_LIBS="$LIBS"
+    CFLAGS="$OPENSSL_CFLAGS $CFLAGS"
+    LIBS="$OPENSSL_LIBS $LIBS"
+
+    AC_MSG_CHECKING([for LIBRESSL_VERSION_NUMBER])
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+      #include <openssl/opensslv.h>
+    ]], [[
+      int dummy = LIBRESSL_VERSION_NUMBER;
+      (void)dummy;
+    ]])],
+    [AC_MSG_RESULT([yes]); have_libressl=yes],
+    [AC_MSG_RESULT([no]); have_libressl=no])
+    if test "x${have_libressl}" = "xyes"; then
+      have_quictls=no
+    fi
+
+    CFLAGS="$save_CFLAGS"
+    LIBS="$save_LIBS"
   fi
 fi
 
@@ -444,7 +448,7 @@ AM_CONDITIONAL([HAVE_CRYPTO], [ test "x${have_crypto}" = "xyes" ])
 # libnghttp3 (required for examples)
 have_libnghttp3=no
 if test "x${request_libnghttp3}" != "xno"; then
-  PKG_CHECK_MODULES([LIBNGHTTP3], [libnghttp3 >= 1.11.0],
+  PKG_CHECK_MODULES([LIBNGHTTP3], [libnghttp3 >= 1.12.0],
                     [have_libnghttp3=yes], [have_libnghttp3=no])
   if test "${have_libnghttp3}" = "xno"; then
     AC_MSG_NOTICE($LIBNGHTTP3_PKG_ERRORS)
@@ -840,7 +844,7 @@ AC_MSG_NOTICE([summary of build options:
       BoringSSL:      ${have_boringssl} (CFLAGS='${BORINGSSL_CFLAGS}' LIBS='${BORINGSSL_LIBS}')
       Picotls:        ${have_picotls} (CFLAGS='${PICOTLS_CFLAGS}' LIBS='${PICOTLS_LIBS}')
       wolfSSL:        ${have_wolfssl} (CFLAGS='${WOLFSSL_CFLAGS}' LIBS='${WOLFSSL_LIBS}')
-      Libbrotlienc:   ${have_libbrotlienc} (CFLAGS="${LIBBROTLIENC_CFLAGS}' LIBS='${LIBBROTLIENC_LIBS}')
-      Libbrotlidec:   ${have_libbrotlidec} (CFLAGS="${LIBBROTLIDEC_CFLAGS}' LIBS='${LIBBROTLIDEC_LIBS}')
+      Libbrotlienc:   ${have_libbrotlienc} (CFLAGS='${LIBBROTLIENC_CFLAGS}' LIBS='${LIBBROTLIENC_LIBS}')
+      Libbrotlidec:   ${have_libbrotlidec} (CFLAGS='${LIBBROTLIDEC_CFLAGS}' LIBS='${LIBBROTLIDEC_LIBS}')
     Examples:         ${enable_examples}
 ])

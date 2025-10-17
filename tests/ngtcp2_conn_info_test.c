@@ -54,6 +54,8 @@ void test_ngtcp2_conn_info_init(void) {
     .bytes_recv = 1000000009,
     .pkt_lost = 454666,
     .bytes_lost = 4891244,
+    .ping_recv = 90001,
+    .pkt_discarded = 17,
   };
   ngtcp2_conn_info *dest, destbuf = {0};
   size_t destlen =
@@ -79,6 +81,8 @@ void test_ngtcp2_conn_info_init(void) {
   assert_uint64(0, ==, destbuf.bytes_recv);
   assert_uint64(0, ==, destbuf.pkt_lost);
   assert_uint64(0, ==, destbuf.bytes_lost);
+  assert_uint64(0, ==, destbuf.ping_recv);
+  assert_uint64(0, ==, destbuf.pkt_discarded);
 
   memset(&destbuf, 0, sizeof(destbuf));
 
@@ -97,4 +101,6 @@ void test_ngtcp2_conn_info_init(void) {
   assert_uint64(cstat.bytes_recv, ==, destbuf.bytes_recv);
   assert_uint64(cstat.pkt_lost, ==, destbuf.pkt_lost);
   assert_uint64(cstat.bytes_lost, ==, destbuf.bytes_lost);
+  assert_uint64(cstat.ping_recv, ==, destbuf.ping_recv);
+  assert_uint64(cstat.pkt_discarded, ==, destbuf.pkt_discarded);
 }
