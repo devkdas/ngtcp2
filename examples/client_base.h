@@ -204,6 +204,8 @@ struct Config {
   // gso_burst is the number of packets to aggregate in GSO.  0 means
   // it is not limited by the configuration.
   size_t gso_burst;
+  // client_ip is the client IP address to use.
+  std::string client_ip;
 };
 
 class ClientBase {
