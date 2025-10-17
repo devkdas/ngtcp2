@@ -160,6 +160,14 @@ struct Config {
   util::ECHServerConfig ech_config;
   // origin_list contains a payload of ORIGIN frame.
   std::optional<std::vector<uint8_t>> origin_list;
+  // no_gso disables GSO.
+  bool no_gso;
+  // show_stat, if true, displays the connection statistics when the
+  // connection is closed.
+  bool show_stat;
+  // gso_burst is the number of packets to aggregate in GSO.  0 means
+  // it is not limited by the configuration.
+  size_t gso_burst;
 };
 
 struct Buffer {

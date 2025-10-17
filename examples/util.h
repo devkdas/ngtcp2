@@ -533,11 +533,16 @@ std::vector<std::string_view> split_str(const std::string_view &s,
                                         char delim = ',');
 
 // parse_version parses |s| to get 4 byte QUIC version.  |s| must be a
-// hex string and must start with "0x" (.e.g, 0x00000001).
+// hex string and must start with "0x" (e.g., 0x00000001).
 std::optional<uint32_t> parse_version(const std::string_view &s);
 
 // read_file reads a file denoted by |path| and returns its content.
 std::optional<std::vector<uint8_t>> read_file(const std::string_view &path);
+
+size_t clamp_buffer_size(ngtcp2_conn *conn, size_t buflen, size_t gso_burst);
+
+bool recv_pkt_time_threshold_exceeded(bool time_sensitive, ngtcp2_tstamp start,
+                                      size_t pktcnt);
 
 enum HPKEPrivateKeyType : uint16_t {
   HPKE_DHKEM_X25519_HKDF_SHA256 = 0x0020,
@@ -587,7 +592,8 @@ std::ostream &operator<<(std::ostream &os, const ngtcp2_cid &cid);
 namespace std {
 template <> struct hash<ngtcp2_cid> {
   hash() {
-    std::ranges::copy(ngtcp2::util::generate_siphash_key(), key.begin());
+    std::ranges::copy(ngtcp2::util::generate_siphash_key(),
+                      std::ranges::begin(key));
   }
 
   std::size_t operator()(const ngtcp2_cid &cid) const noexcept {
