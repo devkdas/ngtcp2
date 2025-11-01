@@ -1809,7 +1809,17 @@ static int conn_ppe_write_frame(ngtcp2_conn *conn, ngtcp2_ppe *ppe,
 static int conn_on_pkt_sent(ngtcp2_conn *conn, ngtcp2_pktns *pktns,
                             ngtcp2_rtb_entry *ent) {
   ngtcp2_rtb *rtb = &pktns->rtb;
+  ngtcp2_cc_pkt cc_pkt;
   int rv;
+
+  if ((ent->flags & NGTCP2_RTB_ENTRY_FLAG_ACK_ELICITING) &&
+      conn->cc.on_pkt_sent) {
+    conn->cc.on_pkt_sent(
+      &conn->cc, &conn->cstat,
+      ngtcp2_cc_pkt_init(&cc_pkt, ent->hd.pkt_num, ent->pktlen, pktns->id,
+                         ent->ts, /* lost = */ 0,
+                         /* tx_in_flight = */ 0, /* is_app_limited = */ 0));
+  }
 
   /* This function implements OnPacketSent, but it handles only
      non-ACK-only packet. */
@@ -3457,7 +3467,6 @@ static ngtcp2_ssize conn_write_pkt(ngtcp2_conn *conn, ngtcp2_pkt_info *pi,
   size_t min_pktlen = conn_min_pktlen(conn);
   int min_padded = 0;
   int padded = 0;
-  ngtcp2_cc_pkt cc_pkt;
   uint64_t crypto_offset;
   uint64_t stream_offset;
   ngtcp2_ssize num_reclaimed;
@@ -4452,12 +4461,6 @@ static ngtcp2_ssize conn_write_pkt(ngtcp2_conn *conn, ngtcp2_pkt_info *pi,
       *pfrc = NULL;
     }
 
-    if ((rtb_entry_flags & NGTCP2_RTB_ENTRY_FLAG_ACK_ELICITING) &&
-        pktns->rtb.num_ack_eliciting == 0 && conn->cc.event) {
-      conn->cc.event(&conn->cc, &conn->cstat, NGTCP2_CC_EVENT_TYPE_TX_START,
-                     ts);
-    }
-
     rv = conn_on_pkt_sent(conn, pktns, ent);
     if (rv != 0) {
       assert(ngtcp2_err_is_fatal(rv));
@@ -4466,18 +4469,9 @@ static ngtcp2_ssize conn_write_pkt(ngtcp2_conn *conn, ngtcp2_pkt_info *pi,
       return rv;
     }
 
-    if (rtb_entry_flags & NGTCP2_RTB_ENTRY_FLAG_ACK_ELICITING) {
-      if (conn->cc.on_pkt_sent) {
-        conn->cc.on_pkt_sent(
-          &conn->cc, &conn->cstat,
-          ngtcp2_cc_pkt_init(&cc_pkt, hd->pkt_num, (size_t)nwrite,
-                             NGTCP2_PKTNS_ID_APPLICATION, ts, ent->rst.lost,
-                             ent->rst.tx_in_flight, ent->rst.is_app_limited));
-      }
-
-      if (conn->flags & NGTCP2_CONN_FLAG_RESTART_IDLE_TIMER_ON_WRITE) {
-        conn_restart_timer_on_write(conn, ts);
-      }
+    if ((rtb_entry_flags & NGTCP2_RTB_ENTRY_FLAG_ACK_ELICITING) &&
+        (conn->flags & NGTCP2_CONN_FLAG_RESTART_IDLE_TIMER_ON_WRITE)) {
+      conn_restart_timer_on_write(conn, ts);
     }
   } else if (pi && conn->tx.ecn.state == NGTCP2_ECN_STATE_CAPABLE) {
     conn_handle_tx_ecn(conn, pi, NULL, pktns, hd, ts);
@@ -5415,7 +5409,7 @@ static int conn_on_retry(ngtcp2_conn *conn, const ngtcp2_pkt_hd *hd,
   ngtcp2_pktns *in_pktns = conn->in_pktns;
   ngtcp2_rtb *rtb = &conn->pktns.rtb;
   ngtcp2_rtb *in_rtb;
-  uint8_t cidbuf[sizeof(retry.odcid.data) * 2 + 1];
+  char cidbuf[sizeof(retry.odcid.data) * 2 + 1];
   uint8_t *token;
 
   if (!in_pktns || (conn->flags & NGTCP2_CONN_FLAG_RECV_RETRY)) {
@@ -5440,9 +5434,9 @@ static int conn_on_retry(ngtcp2_conn *conn, const ngtcp2_pkt_hd *hd,
     return rv;
   }
 
-  ngtcp2_log_infof(&conn->log, NGTCP2_LOG_EVENT_PKT, "odcid=0x%s",
-                   (const char *)ngtcp2_encode_hex(cidbuf, retry.odcid.data,
-                                                   retry.odcid.datalen));
+  ngtcp2_log_infof(
+    &conn->log, NGTCP2_LOG_EVENT_PKT, "odcid=0x%s",
+    ngtcp2_encode_hex_cstr(cidbuf, retry.odcid.data, retry.odcid.datalen));
 
   if (retry.tokenlen == 0) {
     return NGTCP2_ERR_PROTO;
@@ -13029,8 +13023,8 @@ int ngtcp2_conn_get_tls_early_data_rejected(ngtcp2_conn *conn) {
   return (conn->flags & NGTCP2_CONN_FLAG_EARLY_DATA_REJECTED) != 0;
 }
 
-int ngtcp2_conn_update_rtt(ngtcp2_conn *conn, ngtcp2_duration rtt,
-                           ngtcp2_duration ack_delay, ngtcp2_tstamp ts) {
+void ngtcp2_conn_update_rtt(ngtcp2_conn *conn, ngtcp2_duration rtt,
+                            ngtcp2_duration ack_delay, ngtcp2_tstamp ts) {
   ngtcp2_conn_stat *cstat = &conn->cstat;
 
   assert(rtt > 0);
@@ -13057,7 +13051,7 @@ int ngtcp2_conn_update_rtt(ngtcp2_conn *conn, ngtcp2_duration rtt,
         " min_rtt=%" PRIu64 " ack_delay=%" PRIu64,
         rtt / NGTCP2_MILLISECONDS, cstat->min_rtt / NGTCP2_MILLISECONDS,
         ack_delay / NGTCP2_MILLISECONDS);
-      return NGTCP2_ERR_INVALID_ARGUMENT;
+      return;
     }
 
     cstat->latest_rtt = rtt;
@@ -13082,8 +13076,6 @@ int ngtcp2_conn_update_rtt(ngtcp2_conn *conn, ngtcp2_duration rtt,
     cstat->min_rtt / NGTCP2_MILLISECONDS,
     cstat->smoothed_rtt / NGTCP2_MILLISECONDS,
     cstat->rttvar / NGTCP2_MILLISECONDS, ack_delay / NGTCP2_MILLISECONDS);
-
-  return 0;
 }
 
 void ngtcp2_conn_get_conn_info_versioned(ngtcp2_conn *conn,

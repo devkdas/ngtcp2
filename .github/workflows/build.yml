@@ -4,6 +4,10 @@ on: [push, pull_request]
 
 permissions: read-all
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   OPENSSL1_VERSION: 1_1_1w+quic
   OPENSSL3_VERSION: 3.1.7+quic
@@ -591,6 +595,16 @@ jobs:
       if: matrix.buildtool == 'distcheck'
       run: |
         make -j"$NPROC" distcheck DISTCHECK_CONFIGURE_FLAGS="$AUTOTOOLS_OPTS"
+    - name: Build fuzzer
+      if: runner.os == 'Linux' && matrix.buildtool == 'autotools' && matrix.compiler == 'clang'
+      run: |
+        export CXXFLAGS="-fsanitize=address,fuzzer"
+        export LIB_FUZZING_ENGINE=
+        export OUT=fuzz-out
+
+        mkdir $OUT
+
+        .clusterfuzzlite/build_fuzzer.sh
     - name: examples/tests
       if: matrix.buildtool == 'autotools' && matrix.sockaddr == 'native-sockaddr' && runner.os == 'Linux'
       run: |
