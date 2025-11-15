@@ -70,10 +70,6 @@ constexpr size_t NGTCP2_STATELESS_RESET_BURST = 100;
 } // namespace
 
 namespace {
-constexpr size_t NGTCP2_TX_BUFLEN = 64_k;
-} // namespace
-
-namespace {
 auto randgen = util::make_mt19937();
 } // namespace
 
@@ -651,9 +647,7 @@ Handler::Handler(struct ev_loop *loop, Server *server)
     close_wait_{
       .next_pkts_recv = 1,
     },
-    tx_{
-      .data = std::make_unique_for_overwrite<uint8_t[]>(NGTCP2_TX_BUFLEN),
-    } {
+    tx_{} {
   ev_io_init(&wev_, writecb, 0, EV_WRITE);
   wev_.data = this;
   ev_timer_init(&timer_, timeoutcb, 0., 0.);
@@ -1785,7 +1779,7 @@ int Handler::write_streams() {
   ngtcp2_pkt_info pi;
   size_t gso_size;
   auto ts = util::timestamp();
-  auto txbuf = std::span{tx_.data.get(), NGTCP2_TX_BUFLEN};
+  auto txbuf = std::span{txbuf_};
   auto buflen = util::clamp_buffer_size(conn_, txbuf.size(), config.gso_burst);
 
   ngtcp2_path_storage_zero(&ps);
@@ -2238,7 +2232,7 @@ int create_sock(Address &local_addr, const char *addr, const char *port,
     return -1;
   }
 
-  auto res_d = defer(freeaddrinfo, res);
+  auto res_d = defer([res] { freeaddrinfo(res); });
 
   int fd = -1;
 
@@ -4065,7 +4059,7 @@ int main(int argc, char **argv) {
 
   std::cerr << "Using document root " << config.htdocs << std::endl;
 
-  auto ev_loop_d = defer(ev_loop_destroy, EV_DEFAULT);
+  auto ev_loop_d = defer([] { ev_loop_destroy(EV_DEFAULT); });
 
   auto keylog_filename = getenv("SSLKEYLOGFILE");
   if (keylog_filename) {
