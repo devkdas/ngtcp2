@@ -263,16 +263,15 @@ examplestest_SOURCES = examplestest.cc \
 	util_test.cc util_test.h util.cc util.h \
 	siphash_test.cc siphash_test.h siphash.cc siphash.h \
 	siphash_vector.h \
+	sim.cc sim.h \
+	sim_test.cc sim_test.h \
+	debug.cc debug.h \
 	$(top_srcdir)/tests/munit/munit.c $(top_srcdir)/tests/munit/munit.h
 examplestest_CPPFLAGS = ${AM_CPPFLAGS} -I$(top_srcdir)/tests/munit \
 	@JEMALLOC_CFLAGS@
 examplestest_LDADD = ${LDADD} @JEMALLOC_LIBS@
 
 if ENABLE_EXAMPLE_WOLFSSL
-examplestest_SOURCES += \
-	sim.cc sim.h \
-	sim_test.cc sim_test.h \
-	debug.cc debug.h
 examplestest_CPPFLAGS += @WOLFSSL_CFLAGS@
 examplestest_LDADD += \
 	$(top_builddir)/crypto/wolfssl/libngtcp2_crypto_wolfssl.la \
