@@ -28,29 +28,29 @@ cmake_minimum_required(VERSION 3.20)
 cmake_policy(SET CMP0063 NEW)
 
 # XXX using 0.1.90 instead of 0.2.0-DEV
-project(ngtcp2 VERSION 1.17.90 LANGUAGES C)
+project(ngtcp2 VERSION 1.18.90 LANGUAGES C)
 
 # See versioning rule:
 #  https://www.gnu.org/software/libtool/manual/html_node/Updating-version-info.html
 set(LT_CURRENT  23)
-set(LT_REVISION 0)
+set(LT_REVISION 1)
 set(LT_AGE      7)
 
-set(CRYPTO_QUICTLS_LT_CURRENT 5)
+set(CRYPTO_QUICTLS_LT_CURRENT 6)
 set(CRYPTO_QUICTLS_LT_REVISION 0)
-set(CRYPTO_QUICTLS_LT_AGE 3)
+set(CRYPTO_QUICTLS_LT_AGE 4)
 
-set(CRYPTO_GNUTLS_LT_CURRENT 10)
+set(CRYPTO_GNUTLS_LT_CURRENT 11)
 set(CRYPTO_GNUTLS_LT_REVISION 0)
-set(CRYPTO_GNUTLS_LT_AGE 2)
+set(CRYPTO_GNUTLS_LT_AGE 3)
 
-set(CRYPTO_WOLFSSL_LT_CURRENT 7)
+set(CRYPTO_WOLFSSL_LT_CURRENT 8)
 set(CRYPTO_WOLFSSL_LT_REVISION 0)
-set(CRYPTO_WOLFSSL_LT_AGE 2)
+set(CRYPTO_WOLFSSL_LT_AGE 3)
 
-set(CRYPTO_OSSL_LT_CURRENT 0)
+set(CRYPTO_OSSL_LT_CURRENT 1)
 set(CRYPTO_OSSL_LT_REVISION 0)
-set(CRYPTO_OSSL_LT_AGE 0)
+set(CRYPTO_OSSL_LT_AGE 1)
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" "${CMAKE_MODULE_PATH}")
 include(Version)
@@ -148,7 +148,7 @@ if(ENABLE_JEMALLOC)
 endif()
 if(NOT ENABLE_LIB_ONLY)
   find_package(Libev 4.11)
-  find_package(Libnghttp3 1.12.0)
+  find_package(Libnghttp3 1.14.0)
   find_package(Libbrotlienc 1.0.9)
   find_package(Libbrotlidec 1.0.9)
 endif()
