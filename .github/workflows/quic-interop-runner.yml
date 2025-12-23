@@ -56,7 +56,7 @@ jobs:
       matrix: ${{ steps.config.outputs.matrix }}
       run_measurements: ${{ steps.config.outputs.run_measurements }}
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         repository: tatsuhiro-t/quic-interop-runner
         ref: ngtcp2
@@ -99,7 +99,7 @@ jobs:
       matrix: ${{ fromJson(needs.config.outputs.matrix) }}
     name: (${{ matrix.server }} - ${{ matrix.client }})
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         repository: tatsuhiro-t/quic-interop-runner
         ref: ngtcp2
@@ -171,7 +171,7 @@ jobs:
         failures=$(jq -c '.measurements | flatten | .[] | select(.result == "failed")' measurements.json)
         [ -z "$failures" ] || exit 1
     - name: Upload logs on failure
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       if: failure() && steps.verdict.conclusion == 'failure'
       with:
         name: logs-${{ matrix.server }}-${{ matrix.client }}

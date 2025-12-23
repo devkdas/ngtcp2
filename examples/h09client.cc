@@ -62,10 +62,10 @@ namespace {
 constexpr size_t max_preferred_versionslen = 4;
 } // namespace
 
-Config config{};
+Config config;
 
 Stream::Stream(const Request &req, int64_t stream_id)
-  : req(req), stream_id(stream_id), fd(-1) {
+  : req{req}, stream_id{stream_id} {
   nghttp3_buf_init(&reqbuf);
 }
 
@@ -177,25 +177,16 @@ void siginthandler(struct ev_loop *loop, ev_signal *w, int revents) {
 
 Client::Client(struct ev_loop *loop, uint32_t client_chosen_version,
                uint32_t original_version)
-  : remote_addr_{},
-    loop_(loop),
-    addr_(nullptr),
-    port_(nullptr),
-    nstreams_done_(0),
-    nstreams_closed_(0),
-    nkey_update_(0),
-    client_chosen_version_(client_chosen_version),
-    original_version_(original_version),
-    early_data_(false),
-    handshake_confirmed_(false),
+  : loop_{loop},
+    client_chosen_version_{client_chosen_version},
+    original_version_{original_version},
     no_gso_{
 #ifdef UDP_SEGMENT
       config.no_gso
 #else  // !defined(UDP_SEGMENT)
       true
 #endif // !defined(UDP_SEGMENT)
-    },
-    tx_{} {
+    } {
   ev_io_init(&wev_, writecb, 0, EV_WRITE);
   wev_.data = this;
   ev_timer_init(&timer_, timeoutcb, 0., 0.);
@@ -515,8 +506,7 @@ int path_validation(ngtcp2_conn *conn, uint32_t flags, const ngtcp2_path *path,
 } // namespace
 
 void Client::set_remote_addr(const ngtcp2_addr &remote_addr) {
-  memcpy(&remote_addr_.su, remote_addr.addr, remote_addr.addrlen);
-  remote_addr_.len = remote_addr.addrlen;
+  remote_addr_.set(remote_addr.addr);
 }
 
 namespace {
@@ -539,8 +529,10 @@ int select_preferred_address(ngtcp2_conn *conn, ngtcp2_path *dest,
     return NGTCP2_ERR_CALLBACK_FAILURE;
   }
 
-  ngtcp2_addr_copy_byte(&dest->local, &(*ep)->addr.su.sa, (*ep)->addr.len);
-  ngtcp2_addr_copy_byte(&dest->remote, &remote_addr.su.sa, remote_addr.len);
+  ngtcp2_addr_copy_byte(&dest->local, (*ep)->addr.as_sockaddr(),
+                        (*ep)->addr.size());
+  ngtcp2_addr_copy_byte(&dest->remote, remote_addr.as_sockaddr(),
+                        remote_addr.size());
   dest->user_data = *ep;
 
   return 0;
@@ -750,16 +742,8 @@ int Client::init(int fd, const Address &local_addr, const Address &remote_addr,
   params.grease_quic_bit = 1;
 
   auto path = ngtcp2_path{
-    .local =
-      {
-        .addr = const_cast<sockaddr *>(&ep.addr.su.sa),
-        .addrlen = ep.addr.len,
-      },
-    .remote =
-      {
-        .addr = const_cast<sockaddr *>(&remote_addr.su.sa),
-        .addrlen = remote_addr.len,
-      },
+    .local = as_ngtcp2_addr(ep.addr),
+    .remote = as_ngtcp2_addr(remote_addr),
     .user_data = &ep,
   };
   auto rv =
@@ -806,16 +790,11 @@ int Client::feed_data(const Endpoint &ep, const sockaddr *sa, socklen_t salen,
                       const ngtcp2_pkt_info *pi,
                       std::span<const uint8_t> data) {
   auto path = ngtcp2_path{
-    .local =
-      {
-        .addr = const_cast<sockaddr *>(&ep.addr.su.sa),
-        .addrlen = ep.addr.len,
-      },
-    .remote =
-      {
-        .addr = const_cast<sockaddr *>(sa),
-        .addrlen = salen,
-      },
+    .local = as_ngtcp2_addr(ep.addr),
+    .remote{
+      .addr = const_cast<sockaddr *>(sa),
+      .addrlen = salen,
+    },
     .user_data = const_cast<Endpoint *>(&ep),
   };
   if (auto rv = ngtcp2_conn_read_pkt(conn_, &path, pi, data.data(), data.size(),
@@ -845,7 +824,7 @@ int Client::feed_data(const Endpoint &ep, const sockaddr *sa, socklen_t salen,
 
 int Client::on_read(const Endpoint &ep) {
   std::array<uint8_t, 64_k> buf;
-  sockaddr_union su;
+  sockaddr_storage ss;
   size_t pktcnt = 0;
   ngtcp2_pkt_info pi;
 
@@ -857,7 +836,7 @@ int Client::on_read(const Endpoint &ep) {
   uint8_t msg_ctrl[CMSG_SPACE(sizeof(int)) + CMSG_SPACE(sizeof(int))];
 
   msghdr msg{
-    .msg_name = &su,
+    .msg_name = &ss,
     .msg_iov = &msg_iov,
     .msg_iovlen = 1,
     .msg_control = msg_ctrl,
@@ -871,7 +850,7 @@ int Client::on_read(const Endpoint &ep) {
       break;
     }
 
-    msg.msg_namelen = sizeof(su);
+    msg.msg_namelen = sizeof(ss);
     msg.msg_controllen = sizeof(msg_ctrl);
 
     auto nread = recvmsg(ep.fd, &msg, 0);
@@ -890,7 +869,7 @@ int Client::on_read(const Endpoint &ep) {
       continue;
     }
 
-    pi.ecn = msghdr_get_ecn(&msg, su.storage.ss_family);
+    pi.ecn = msghdr_get_ecn(&msg, ss.ss_family);
     auto gso_size = msghdr_get_udp_gro(&msg);
     if (gso_size == 0) {
       gso_size = static_cast<size_t>(nread);
@@ -904,9 +883,10 @@ int Client::on_read(const Endpoint &ep) {
       ++pktcnt;
 
       if (!config.quiet) {
-        std::cerr << "Received packet: local="
-                  << util::straddr(&ep.addr.su.sa, ep.addr.len)
-                  << " remote=" << util::straddr(&su.sa, msg.msg_namelen)
+        std::cerr << "Received packet: local=" << util::straddr(ep.addr)
+                  << " remote="
+                  << util::straddr(reinterpret_cast<const sockaddr *>(&ss),
+                                   msg.msg_namelen)
                   << " ecn=0x" << std::hex << static_cast<uint32_t>(pi.ecn)
                   << std::dec << " " << datalen << " bytes" << std::endl;
       }
@@ -920,8 +900,8 @@ int Client::on_read(const Endpoint &ep) {
         if (!config.quiet) {
           std::cerr << "** Simulated incoming packet loss **" << std::endl;
         }
-      } else if (feed_data(ep, &su.sa, msg.msg_namelen, &pi,
-                           {data.data(), datalen}) != 0) {
+      } else if (feed_data(ep, reinterpret_cast<const sockaddr *>(&ss),
+                           msg.msg_namelen, &pi, {data.data(), datalen}) != 0) {
         return -1;
       }
 
@@ -1129,8 +1109,7 @@ void Client::update_timer() {
 
 #ifdef HAVE_LINUX_RTNETLINK_H
 namespace {
-int bind_addr(Address &local_addr, int fd, const in_addr_union *iau,
-              int family) {
+int bind_addr(Address &local_addr, int fd, const InAddr &ia, int family) {
   addrinfo hints{
     .ai_flags = AI_PASSIVE,
     .ai_family = family,
@@ -1140,15 +1119,16 @@ int bind_addr(Address &local_addr, int fd, const in_addr_union *iau,
   char *node;
   std::array<char, NI_MAXHOST> nodebuf;
 
-  if (iau) {
-    if (inet_ntop(family, iau, nodebuf.data(), nodebuf.size()) == nullptr) {
+  if (in_addr_empty(ia)) {
+    node = nullptr;
+  } else {
+    if (inet_ntop(family, in_addr_get_ptr(ia), nodebuf.data(),
+                  nodebuf.size()) == nullptr) {
       std::cerr << "inet_ntop: " << strerror(errno) << std::endl;
       return -1;
     }
 
     node = nodebuf.data();
-  } else {
-    node = nullptr;
   }
 
   if (auto rv = getaddrinfo(node, "0", &hints, &res); rv != 0) {
@@ -1169,13 +1149,14 @@ int bind_addr(Address &local_addr, int fd, const in_addr_union *iau,
     return -1;
   }
 
-  socklen_t len = sizeof(local_addr.su.storage);
-  if (getsockname(fd, &local_addr.su.sa, &len) == -1) {
+  sockaddr_storage ss;
+  socklen_t len = sizeof(ss);
+  if (getsockname(fd, reinterpret_cast<sockaddr *>(&ss), &len) == -1) {
     std::cerr << "getsockname: " << strerror(errno) << std::endl;
     return -1;
   }
-  local_addr.len = len;
-  local_addr.ifindex = 0;
+
+  local_addr.set(reinterpret_cast<const sockaddr *>(&ss));
 
   return 0;
 }
@@ -1185,18 +1166,19 @@ int bind_addr(Address &local_addr, int fd, const in_addr_union *iau,
 #ifndef HAVE_LINUX_RTNETLINK_H
 namespace {
 int connect_sock(Address &local_addr, int fd, const Address &remote_addr) {
-  if (connect(fd, &remote_addr.su.sa, remote_addr.len) != 0) {
+  if (connect(fd, remote_addr.as_sockaddr(), remote_addr.size()) != 0) {
     std::cerr << "connect: " << strerror(errno) << std::endl;
     return -1;
   }
 
-  socklen_t len = sizeof(local_addr.su.storage);
-  if (getsockname(fd, &local_addr.su.sa, &len) == -1) {
+  sockaddr_storage ss;
+  socklen_t len = sizeof(ss);
+  if (getsockname(fd, reinterpret_cast<sockaddr *>(&ss), &len) == -1) {
     std::cerr << "getsockname: " << strerror(errno) << std::endl;
     return -1;
   }
-  local_addr.len = len;
-  local_addr.ifindex = 0;
+
+  local_addr.set(reinterpret_cast<const sockaddr *>(&ss));
 
   return 0;
 }
@@ -1250,9 +1232,7 @@ int create_sock(Address &remote_addr, const char *addr, const char *port) {
     return -1;
   }
 
-  remote_addr.len = rp->ai_addrlen;
-  memcpy(&remote_addr.su, rp->ai_addr, rp->ai_addrlen);
-  remote_addr.ifindex = 0;
+  remote_addr.set(rp->ai_addr);
 
   return fd;
 }
@@ -1260,9 +1240,9 @@ int create_sock(Address &remote_addr, const char *addr, const char *port) {
 
 std::optional<Endpoint *> Client::endpoint_for(const Address &remote_addr) {
 #ifdef HAVE_LINUX_RTNETLINK_H
-  in_addr_union iau;
+  InAddr ia;
 
-  if (get_local_addr(iau, remote_addr) != 0) {
+  if (get_local_addr(ia, remote_addr) != 0) {
     std::cerr << "Could not get local address for a selected preferred address"
               << std::endl;
     return nullptr;
@@ -1270,12 +1250,14 @@ std::optional<Endpoint *> Client::endpoint_for(const Address &remote_addr) {
 
   auto current_path = ngtcp2_conn_get_path(conn_);
   auto current_ep = static_cast<Endpoint *>(current_path->user_data);
-  if (addreq(&current_ep->addr.su.sa, iau)) {
+  if (addreq(current_ep->addr, ia)) {
     return current_ep;
   }
 #endif // defined(HAVE_LINUX_RTNETLINK_H)
 
-  auto fd = udp_sock(remote_addr.su.sa.sa_family);
+  auto family = remote_addr.family();
+
+  auto fd = udp_sock(family);
   if (fd == -1) {
     return nullptr;
   }
@@ -1283,7 +1265,7 @@ std::optional<Endpoint *> Client::endpoint_for(const Address &remote_addr) {
   Address local_addr;
 
 #ifdef HAVE_LINUX_RTNETLINK_H
-  if (bind_addr(local_addr, fd, &iau, remote_addr.su.sa.sa_family) != 0) {
+  if (bind_addr(local_addr, fd, ia, family) != 0) {
     close(fd);
     return nullptr;
   }
@@ -1318,21 +1300,23 @@ int Client::change_local_addr() {
     std::cerr << "Changing local address" << std::endl;
   }
 
-  auto nfd = udp_sock(remote_addr_.su.sa.sa_family);
+  auto family = remote_addr_.family();
+
+  auto nfd = udp_sock(family);
   if (nfd == -1) {
     return -1;
   }
 
 #ifdef HAVE_LINUX_RTNETLINK_H
-  in_addr_union iau;
+  InAddr ia;
 
-  if (get_local_addr(iau, remote_addr_) != 0) {
+  if (get_local_addr(ia, remote_addr_) != 0) {
     std::cerr << "Could not get local address" << std::endl;
     close(nfd);
     return -1;
   }
 
-  if (bind_addr(local_addr, nfd, &iau, remote_addr_.su.sa.sa_family) != 0) {
+  if (bind_addr(local_addr, nfd, ia, family) != 0) {
     close(nfd);
     return -1;
   }
@@ -1344,8 +1328,8 @@ int Client::change_local_addr() {
 #endif // !defined(HAVE_LINUX_RTNETLINK_H)
 
   if (!config.quiet) {
-    std::cerr << "Local address is now "
-              << util::straddr(&local_addr.su.sa, local_addr.len) << std::endl;
+    std::cerr << "Local address is now " << util::straddr(local_addr)
+              << std::endl;
   }
 
   endpoints_.emplace_back();
@@ -1356,8 +1340,7 @@ int Client::change_local_addr() {
   ev_io_init(&ep.rev, readcb, nfd, EV_READ);
   ep.rev.data = &ep;
 
-  ngtcp2_addr addr;
-  ngtcp2_addr_init(&addr, &local_addr.su.sa, local_addr.len);
+  auto addr = as_ngtcp2_addr(local_addr);
 
   if (config.nat_rebinding) {
     ngtcp2_conn_set_local_addr(conn_, &addr);
@@ -1365,11 +1348,7 @@ int Client::change_local_addr() {
   } else {
     auto path = ngtcp2_path{
       .local = addr,
-      .remote =
-        {
-          .addr = const_cast<sockaddr *>(&remote_addr_.su.sa),
-          .addrlen = remote_addr_.len,
-        },
+      .remote = as_ngtcp2_addr(remote_addr_),
       .user_data = &ep,
     };
     if (auto rv = ngtcp2_conn_initiate_immediate_migration(conn_, &path,
@@ -1578,8 +1557,7 @@ Client::send_packet(const Endpoint &ep, const ngtcp2_addr &remote_addr,
   assert(static_cast<size_t>(nwrite) == data.size());
 
   if (!config.quiet) {
-    std::cerr << "Sent packet: local="
-              << util::straddr(&ep.addr.su.sa, ep.addr.len) << " remote="
+    std::cerr << "Sent packet: local=" << util::straddr(ep.addr) << " remote="
               << util::straddr(remote_addr.addr, remote_addr.addrlen)
               << " ecn=0x" << std::hex << ecn << std::dec << " " << nwrite
               << " bytes" << std::endl;
@@ -1597,11 +1575,10 @@ void Client::on_send_blocked(const ngtcp2_path &path, unsigned int ecn,
 
   auto &p = tx_.blocked;
 
-  memcpy(&p.remote_addr.su, path.remote.addr, path.remote.addrlen);
+  p.remote_addr.set(path.remote.addr);
 
   auto &ep = *static_cast<Endpoint *>(path.user_data);
 
-  p.remote_addr.len = path.remote.addrlen;
   p.endpoint = &ep;
   p.ecn = ecn;
   p.data = data;
@@ -1629,13 +1606,8 @@ int Client::send_blocked_packet() {
 
   auto &p = tx_.blocked;
 
-  ngtcp2_addr remote_addr{
-    .addr = &p.remote_addr.su.sa,
-    .addrlen = p.remote_addr.len,
-  };
-
-  auto [rest, rv] =
-    send_packet(*p.endpoint, remote_addr, p.ecn, p.data, p.gso_size);
+  auto [rest, rv] = send_packet(*p.endpoint, as_ngtcp2_addr(p.remote_addr),
+                                p.ecn, p.data, p.gso_size);
   if (rv != 0) {
     assert(NETWORK_ERR_SEND_BLOCKED == rv);
 
@@ -1807,15 +1779,13 @@ int Client::select_preferred_address(Address &selected_addr,
     if (!paddr->ipv4_present) {
       return -1;
     }
-    selected_addr.su.in = paddr->ipv4;
-    selected_addr.len = sizeof(paddr->ipv4);
+    selected_addr.skaddr.emplace<sockaddr_in>(paddr->ipv4);
     break;
   case AF_INET6:
     if (!paddr->ipv6_present) {
       return -1;
     }
-    selected_addr.su.in6 = paddr->ipv6;
-    selected_addr.len = sizeof(paddr->ipv6);
+    selected_addr.skaddr.emplace<sockaddr_in6>(paddr->ipv6);
     break;
   default:
     return -1;
@@ -1823,8 +1793,8 @@ int Client::select_preferred_address(Address &selected_addr,
 
   if (!config.quiet) {
     char host[NI_MAXHOST], service[NI_MAXSERV];
-    if (auto rv = getnameinfo(&selected_addr.su.sa, selected_addr.len, host,
-                              sizeof(host), service, sizeof(service),
+    if (auto rv = getnameinfo(selected_addr.as_sockaddr(), selected_addr.size(),
+                              host, sizeof(host), service, sizeof(service),
                               NI_NUMERICHOST | NI_NUMERICSERV);
         rv != 0) {
       std::cerr << "getnameinfo: " << gai_strerror(rv) << std::endl;
@@ -1853,15 +1823,15 @@ int run(Client &c, const char *addr, const char *port,
   }
 
 #ifdef HAVE_LINUX_RTNETLINK_H
-  in_addr_union iau;
+  InAddr ia;
 
-  if (get_local_addr(iau, remote_addr) != 0) {
+  if (get_local_addr(ia, remote_addr) != 0) {
     std::cerr << "Could not get local address" << std::endl;
     close(fd);
     return -1;
   }
 
-  if (bind_addr(local_addr, fd, &iau, remote_addr.su.sa.sa_family) != 0) {
+  if (bind_addr(local_addr, fd, ia, remote_addr.family()) != 0) {
     close(fd);
     return -1;
   }
@@ -1956,34 +1926,10 @@ void print_usage() {
 } // namespace
 
 namespace {
-void config_set_default(Config &config) {
-  config = Config{
-    .tx_loss_prob = 0.,
-    .rx_loss_prob = 0.,
-    .fd = -1,
-    .ciphers = util::crypto_default_ciphers(),
-    .groups = util::crypto_default_groups(),
-    .version = NGTCP2_PROTO_VER_V1,
-    .timeout = 30 * NGTCP2_SECONDS,
-    .http_method = "GET"sv,
-    .max_data = 24_m,
-    .max_stream_data_bidi_local = 16_m,
-    .max_stream_data_uni = 16_m,
-    .max_streams_uni = 100,
-    .cc_algo = NGTCP2_CC_ALGO_CUBIC,
-    .initial_rtt = NGTCP2_DEFAULT_INITIAL_RTT,
-    .handshake_timeout = UINT64_MAX,
-    .ack_thresh = 2,
-    .initial_pkt_num = UINT32_MAX,
-  };
-}
-} // namespace
-
-namespace {
 void print_help() {
   print_usage();
 
-  config_set_default(config);
+  Config config;
 
   std::cout << R"(
   <HOST>      Remote server host (DNS name or IP address).  In case of
@@ -2221,7 +2167,6 @@ Options:
 } // namespace
 
 int main(int argc, char **argv) {
-  config_set_default(config);
   char *data_path = nullptr;
   const char *private_key_file = nullptr;
   const char *cert_file = nullptr;

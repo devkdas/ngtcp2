@@ -12,11 +12,11 @@ env:
   OPENSSL1_VERSION: 1_1_1w+quic
   OPENSSL3_VERSION: 3.1.7+quic
   OSSL_VERSION: 3.6.0
-  BORINGSSL_VERSION: db1a8456167249f95b854a1cd24c6b553d0f1567
-  AWSLC_VERSION: v1.62.0
-  PICOTLS_VERSION: 4e443c11eb48949e597911b1b772a9d2588b4769
-  WOLFSSL_VERSION: v5.8.2-stable
-  LIBRESSL_VERSION: v4.2.0
+  BORINGSSL_VERSION: e575a84d5f051483793b14c07b60720d0ed318b3
+  AWSLC_VERSION: v1.66.1
+  PICOTLS_VERSION: 34d4d6496cec80bc3b56dbdab45f21bd9fbc17aa
+  WOLFSSL_VERSION: v5.8.4-stable
+  LIBRESSL_VERSION: v4.2.1
   NGHTTP3_VERSION: head
 
 jobs:
@@ -51,33 +51,33 @@ jobs:
 
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-14, macos-15]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15]
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     - name: Restore OpenSSL v1.1.1 cache
       id: cache-openssl1
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: openssl1/build
         key: ${{ matrix.os }}-openssl-${{ env.OPENSSL1_VERSION }}
     - name: Restore OpenSSL v3.x cache
       id: cache-openssl3
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: openssl3/build
         key: ${{ matrix.os }}-openssl-${{ env.OPENSSL3_VERSION }}
     - name: Restore OSSL cache
       id: cache-ossl
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ossl/build
         key: ${{ matrix.os }}-ossl-${{ env.OSSL_VERSION }}
     - name: Restore BoringSSL cache
       id: cache-boringssl
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           boringssl/build/libcrypto.a
@@ -86,7 +86,7 @@ jobs:
         key: ${{ matrix.os }}-boringssl-${{ env.BORINGSSL_VERSION }}
     - name: Restore aws-lc cache
       id: cache-awslc
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           aws-lc/build/crypto/libcrypto.a
@@ -95,7 +95,7 @@ jobs:
         key: ${{ matrix.os }}-awslc-${{ env.AWSLC_VERSION }}
     - name: Restore Picotls + OpenSSL v1.1.1 cache
       id: cache-picotls-openssl1
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           picotls-openssl1/build/libpicotls-core.a
@@ -104,7 +104,7 @@ jobs:
         key: ${{ matrix.os }}-picotls-${{ env.PICOTLS_VERSION }}-openssl-${{ env.OPENSSL1_VERSION }}
     - name: Restore Picotls + OpenSSL v3.x cache
       id: cache-picotls-openssl3
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           picotls-openssl3/build/libpicotls-core.a
@@ -113,7 +113,7 @@ jobs:
         key: ${{ matrix.os }}-picotls-${{ env.PICOTLS_VERSION }}-openssl-${{ env.OPENSSL3_VERSION }}
     - name: Restore Picotls + OSSL cache
       id: cache-picotls-ossl
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           picotls-ossl/build/libpicotls-core.a
@@ -122,7 +122,7 @@ jobs:
         key: ${{ matrix.os }}-picotls-${{ env.PICOTLS_VERSION }}-ossl-${{ env.OSSL_VERSION }}
     - name: Restore Picotls + LibreSSL cache
       id: cache-picotls-libressl
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           picotls-libressl/build/libpicotls-core.a
@@ -131,20 +131,20 @@ jobs:
         key: ${{ matrix.os }}-picotls-${{ env.PICOTLS_VERSION }}-libressl-${{ env.LIBRESSL_VERSION }}
     - name: Restore wolfSSL cache
       id: cache-wolfssl
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: wolfssl/build
         key: ${{ matrix.os }}-wolfssl-${{ env.WOLFSSL_VERSION }}
     - name: Restore LibreSSL cache
       id: cache-libressl
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           libressl/build
         key: ${{ matrix.os }}-libressl-${{ env.LIBRESSL_VERSION }}
     - name: Restore nghttp3 cache
       id: cache-nghttp3
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: nghttp3/build
         key: ${{ matrix.os }}-nghttp3-${{ needs.setup.outputs.nghttp3-version }}
@@ -231,7 +231,7 @@ jobs:
     - name: Build wolfSSL
       if: steps.cache-wolfssl.outputs.cache-hit != 'true'
       run: |
-        if [ "${{ runner.os }}" = "macOS" ]; then
+        if [ "${{ runner.arch }}" = "ARM64" ]; then
           export EXTRA_CONFIGURE_FLAGS="--enable-armasm"
         else
           export EXTRA_CONFIGURE_FLAGS="--enable-aesni"
@@ -260,63 +260,88 @@ jobs:
 
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-14, macos-15]
+        os: [ubuntu-24.04]
         compiler: [gcc, clang]
-        buildtool: [autotools, distcheck, cmake]
-        # group-a ... openssl3, pictols+openssl3, wolfssl, boringssl
-        # group-b ... openssl1, picotls+openssl1, wolfssl, aws-lc
-        # group-c ... libressl, picotls+libressl, wolfssl, boringssl
-        # group-d ... ossl, picotls+ossl, wolfssl, aws-lc
-        tls: [group-a, group-b, group-c, group-d]
-        sockaddr: [native-sockaddr, generic-sockaddr]
-        exclude:
-        - os: macos-14
+        buildtool: [autotools, cmake]
+        tls:
+        - openssl: openssl3
+          boringssl: boringssl
+        - openssl: openssl1
+          boringssl: aws-lc
+        - openssl: libressl
+          boringssl: boringssl
+        - openssl: ossl
+          boringssl: aws-lc
+        sockaddr: [native-sockaddr]
+        include:
+        - os: ubuntu-24.04
+          compiler: clang
           buildtool: distcheck
+          tls:
+            openssl: ossl
+            boringssl: aws-lc
+          sockaddr: native-sockaddr
+        - os: ubuntu-24.04
+          compiler: clang
+          buildtool: autotools
+          tls:
+            openssl: ossl
+            boringssl: aws-lc
+          sockaddr: generic-sockaddr
+        - os: macos-14
+          compiler: clang
+          buildtool: autotools
+          tls:
+            openssl: ossl
+            boringssl: aws-lc
+          sockaddr: native-sockaddr
+        - os: macos-14
+          compiler: clang
+          buildtool: autotools
+          tls:
+            openssl: ossl
+            boringssl: aws-lc
+          sockaddr: generic-sockaddr
         - os: macos-15
-          buildtool: distcheck
-        - compiler: gcc
-          buildtool: distcheck
-        - tls: group-c
-          buildtool: distcheck
-        - tls: group-a
-          buildtool: distcheck
-        - tls: group-d
-          buildtool: distcheck
-        - compiler: gcc
+          compiler: clang
+          buildtool: autotools
+          tls:
+            openssl: openssl1
+            boringssl: aws-lc
+          sockaddr: native-sockaddr
+        - os: macos-15
+          compiler: clang
+          buildtool: autotools
+          tls:
+            openssl: ossl
+            boringssl: aws-lc
+          sockaddr: native-sockaddr
+        - os: macos-15
+          compiler: clang
+          buildtool: autotools
+          tls:
+            openssl: ossl
+            boringssl: aws-lc
           sockaddr: generic-sockaddr
-        - tls: group-c
-          sockaddr: generic-sockaddr
-        - tls: group-a
-          sockaddr: generic-sockaddr
-        - tls: group-d
-          sockaddr: generic-sockaddr
-        - buildtool: distcheck
-          sockaddr: generic-sockaddr
-        - buildtool: cmake
-          sockaddr: generic-sockaddr
-        - os: macos-14
+        - os: ubuntu-24.04-arm
           compiler: gcc
-        - os: macos-14
-          tls: group-c
-        - os: macos-14
-          tls: group-a
-        - os: macos-14
-          buildtool: cmake
-        - os: macos-15
-          compiler: gcc
-        - os: macos-15
-          tls: group-c
-        - os: macos-15
-          tls: group-a
-        - os: macos-15
-          buildtool: cmake
-        - os: macos-14
-          tls: group-d
+          buildtool: autotools
+          tls:
+            openssl: ossl
+            boringssl: aws-lc
+          sockaddr: native-sockaddr
+        - os: ubuntu-24.04-arm
+          compiler: clang
+          buildtool: autotools
+          tls:
+            openssl: ossl
+            boringssl: aws-lc
+          sockaddr: native-sockaddr
 
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
     - name: Startup
@@ -371,29 +396,29 @@ jobs:
         echo 'CC=gcc-14' >> $GITHUB_ENV
         echo 'CXX=g++-14' >> $GITHUB_ENV
     - name: Restore OpenSSL v1.1.1 cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-b'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.openssl == 'openssl1'
       with:
         path: openssl1/build
         key: ${{ matrix.os }}-openssl-${{ env.OPENSSL1_VERSION }}
         fail-on-cache-miss: true
     - name: Restore OpenSSL v3.x cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-a'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.openssl == 'openssl3'
       with:
         path: openssl3/build
         key: ${{ matrix.os }}-openssl-${{ env.OPENSSL3_VERSION }}
         fail-on-cache-miss: true
     - name: Restore OSSL cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-d'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.openssl == 'ossl'
       with:
         path: ossl/build
         key: ${{ matrix.os }}-ossl-${{ env.OSSL_VERSION }}
         fail-on-cache-miss: true
     - name: Restore BoringSSL cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-a' || matrix.tls == 'group-c'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.boringssl == 'boringssl'
       with:
         path: |
           boringssl/build/libcrypto.a
@@ -402,8 +427,8 @@ jobs:
         key: ${{ matrix.os }}-boringssl-${{ env.BORINGSSL_VERSION }}
         fail-on-cache-miss: true
     - name: Restore aws-lc cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-b' || matrix.tls == 'group-d'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.boringssl == 'aws-lc'
       with:
         path: |
           aws-lc/build/crypto/libcrypto.a
@@ -412,8 +437,8 @@ jobs:
         key: ${{ matrix.os }}-awslc-${{ env.AWSLC_VERSION }}
         fail-on-cache-miss: true
     - name: Restore Picotls + OpenSSL v1.1.1 cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-b'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.openssl == 'openssl1'
       with:
         path: |
           picotls-openssl1/build/libpicotls-core.a
@@ -422,8 +447,8 @@ jobs:
         key: ${{ matrix.os }}-picotls-${{ env.PICOTLS_VERSION }}-openssl-${{ env.OPENSSL1_VERSION }}
         fail-on-cache-miss: true
     - name: Restore Picotls + OpenSSL v3.x cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-a'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.openssl == 'openssl3'
       with:
         path: |
           picotls-openssl3/build/libpicotls-core.a
@@ -432,8 +457,8 @@ jobs:
         key: ${{ matrix.os }}-picotls-${{ env.PICOTLS_VERSION }}-openssl-${{ env.OPENSSL3_VERSION }}
         fail-on-cache-miss: true
     - name: Restore Picotls + OSSL cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-d'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.openssl == 'ossl'
       with:
         path: |
           picotls-ossl/build/libpicotls-core.a
@@ -442,22 +467,22 @@ jobs:
         key: ${{ matrix.os }}-picotls-${{ env.PICOTLS_VERSION }}-ossl-${{ env.OSSL_VERSION }}
         fail-on-cache-miss: true
     - name: Restore wolfSSL cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: wolfssl/build
         key: ${{ matrix.os }}-wolfssl-${{ env.WOLFSSL_VERSION }}
         fail-on-cache-miss: true
     - name: Restore libreSSL cache
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-c'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.openssl == 'libressl'
       with:
         path: |
           libressl/build
         key: ${{ matrix.os }}-libressl-${{ env.LIBRESSL_VERSION }}
         fail-on-cache-miss: true
     - name: Restore Picotls + LibreSSL
-      uses: actions/cache/restore@v4
-      if: matrix.tls == 'group-c'
+      uses: actions/cache/restore@v5
+      if: matrix.tls.openssl == 'libressl'
       with:
         path: |
           picotls-libressl/build/libpicotls-core.a
@@ -466,7 +491,7 @@ jobs:
         key: ${{ matrix.os }}-picotls-${{ env.PICOTLS_VERSION }}-libressl-${{ env.LIBRESSL_VERSION }}
         fail-on-cache-miss: true
     - name: Restore nghttp3 cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: nghttp3/build
         key: ${{ matrix.os }}-nghttp3-${{ needs.setup.outputs.nghttp3-version }}
@@ -476,21 +501,21 @@ jobs:
         PKG_CONFIG_PATH="$PWD/openssl1/build/lib/pkgconfig:$PWD/openssl3/build/lib64/pkgconfig:$PWD/ossl/build/lib/pkgconfig:$PWD/ossl/build/lib64/pkgconfig:$PWD/wolfssl/build/lib/pkgconfig:$PWD/nghttp3/build/lib/pkgconfig:$PWD/libressl/build/lib/pkgconfig"
         LDFLAGS="-Wl,-rpath,$PWD/openssl1/build/lib -Wl,-rpath,$PWD/openssl3/build/lib64 -Wl,-rpath,$PWD/ossl/build/lib -Wl,-rpath,$PWD/ossl/build/lib64 -Wl,-rpath,$PWD/libressl/build/lib"
 
-        case "${{ matrix.tls }}" in
-          "group-a")
+        case "${{ matrix.tls.openssl }}" in
+          "openssl3")
             PICOTLS_PREFIX="$PWD/picotls-openssl3"
             ;;
-          "group-b")
+          "openssl1")
             PICOTLS_PREFIX="$PWD/picotls-openssl1"
             ;;
-          "group-c")
+          "libressl")
             PICOTLS_PREFIX="$PWD/picotls-libressl"
             ;;
-          "group-d")
+          "ossl")
             PICOTLS_PREFIX="$PWD/picotls-ossl"
             ;;
           *)
-            echo "unsupported tls group: ${{ matrix.tls }}"
+            echo "unsupported openssl: ${{ matrix.tls.openssl }}"
             exit 1
             ;;
         esac
@@ -507,7 +532,7 @@ jobs:
         echo 'PICOTLS_PREFIX='"$PICOTLS_PREFIX" >> $GITHUB_ENV
         echo 'AUTOTOOLS_OPTS='"$AUTOTOOLS_OPTS" >> $GITHUB_ENV
     - name: Setup BoringSSL environment variables
-      if: matrix.tls == 'group-a' || matrix.tls == 'group-c'
+      if: matrix.tls.boringssl == 'boringssl'
       run: |
         BORINGSSL_INCLUDE_DIR="$PWD/boringssl/include/"
         BORINGSSL_CFLAGS="-I$BORINGSSL_INCLUDE_DIR"
@@ -517,7 +542,7 @@ jobs:
         echo 'BORINGSSL_LIBS='"$BORINGSSL_LIBS" >> $GITHUB_ENV
         echo 'BORINGSSL_INCLUDE_DIR='"$BORINGSSL_INCLUDE_DIR" >> $GITHUB_ENV
     - name: Setup aws-lc environment variables
-      if: matrix.tls == 'group-b' || matrix.tls == 'group-d'
+      if: matrix.tls.boringssl == 'aws-lc'
       run: |
         BORINGSSL_INCLUDE_DIR="$PWD/aws-lc/include/"
         BORINGSSL_CFLAGS="-I$BORINGSSL_INCLUDE_DIR"
@@ -590,7 +615,17 @@ jobs:
       run: |
         [ -n "$NGTCP2_BUILD_DIR" ] && cd "$NGTCP2_BUILD_DIR"
         make -j"$NPROC"
-        make -j"$NPROC" check
+        make -j"$NPROC" check TESTS=
+    - name: Run tests
+      if: matrix.buildtool == 'autotools'
+      run: |
+        cd tests
+        ./main
+    - name: Run examples tests
+      if: matrix.buildtool == 'autotools' && matrix.sockaddr == 'native-sockaddr'
+      run: |
+        cd examples
+        ./examplestest
     - name: Build ngtcp2 with distcheck
       if: matrix.buildtool == 'distcheck'
       run: |
@@ -614,7 +649,13 @@ jobs:
         # failure; see https://gitlab.com/gnutls/gnutls/-/issues/1403
         EXPR="not (gnutls-boringssl and earlydata)"
 
-        if [ "${{ matrix.tls }}" = "group-c" ]; then
+        # It looks like wolfSSL on ubuntu-24.04-arm cannot use
+        # TLS_CHACHA20_POLY1305_SHA256
+        if [ "${{ runner.arch }}" = "ARM64" ]; then
+          EXPR="$EXPR and not (wolfssl and TLS_CHACHA20_POLY1305_SHA256)"
+        fi
+
+        if [ "${{ matrix.tls.openssl }}" = "libressl" ]; then
           # libressl does not support resumption, earlydata,
           # TLS_AES_128_CCM_SHA256, and X25519.  Resumption does not
           # work between libressl flavored picotls server and
@@ -630,7 +671,7 @@ jobs:
         [ -n "$NGTCP2_BUILD_DIR" ] && cd "$NGTCP2_BUILD_DIR"
         "$NGTCP2_SOURCE_DIR"/ci/gen-certificate.sh
 
-        if [ "${{ matrix.tls }}" = "group-d" ]; then
+        if [ "${{ matrix.tls.openssl }}" = "ossl" ]; then
           CLIENTS="osslclient"
           SERVERS="osslserver"
         else
@@ -677,7 +718,7 @@ jobs:
       OSCC: ${{ matrix.oscc }}
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
     - name: Prepare for i386
@@ -732,7 +773,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
     - uses: microsoft/setup-msbuild@v2
@@ -758,7 +799,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
       with:
         fetch-depth: 0
         submodules: recursive
