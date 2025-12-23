@@ -1226,7 +1226,6 @@ int bind_addr(Address &local_addr, int fd, const InAddr &ia, int family) {
       std::cerr << "inet_ntop: " << strerror(errno) << std::endl;
       return -1;
     }
-
     node = nodebuf.data();
   }
 
@@ -1244,7 +1243,8 @@ int bind_addr(Address &local_addr, int fd, const InAddr &ia, int family) {
   }
 
   if (!rp) {
-    std::cerr << "Could not bind" << std::endl;
+    // Updated error message to be more informative
+    std::cerr << "Could not bind to address " << (node ? node : "auto-selected") << ": " << strerror(errno) << std::endl;
     return -1;
   }
 
@@ -1265,6 +1265,35 @@ int bind_addr(Address &local_addr, int fd, const InAddr &ia, int family) {
 #ifndef HAVE_LINUX_RTNETLINK_H
 namespace {
 int connect_sock(Address &local_addr, int fd, const Address &remote_addr) {
+  if (!config.client_ip.empty()) {
+    addrinfo hints_bind{
+      .ai_family = remote_addr.su.sa.sa_family, // Match family of remote
+      .ai_socktype = SOCK_DGRAM,
+    };
+    addrinfo *res_bind, *rp_bind;
+
+    if (auto rv = getaddrinfo(config.client_ip.c_str(), "0", &hints_bind, &res_bind); rv != 0) {
+      std::cerr << "getaddrinfo for client_ip bind failed: " << gai_strerror(rv) << std::endl;
+      return -1;
+    }
+
+    auto res_bind_d = defer([res_bind] { freeaddrinfo(res_bind); });
+
+    for (rp_bind = res_bind; rp_bind; rp_bind = rp_bind->ai_next) {
+      if (bind(fd, rp_bind->ai_addr, rp_bind->ai_addrlen) != -1) {
+        break; // Successful bind
+      }
+    }
+
+    if (!rp_bind) { // Bind failed
+      std::cerr << "Could not bind to client_ip " << config.client_ip << ": " << strerror(errno) << std::endl;
+      return -1;
+    }
+    if (!config.quiet) {
+        std::cerr << "Successfully bound to client_ip: " << config.client_ip << std::endl;
+    }
+  }
+
   if (connect(fd, remote_addr.as_sockaddr(), remote_addr.size()) != 0) {
     std::cerr << "connect: " << strerror(errno) << std::endl;
     return -1;
@@ -2402,6 +2431,31 @@ void print_usage() {
 } // namespace
 
 namespace {
+void config_set_default(Config &config) {
+  config = Config{
+    .tx_loss_prob = 0.,
+    .rx_loss_prob = 0.,
+    .fd = -1,
+    .ciphers = util::crypto_default_ciphers(),
+    .groups = util::crypto_default_groups(),
+    .version = NGTCP2_PROTO_VER_V1,
+    .timeout = 30 * NGTCP2_SECONDS,
+    .http_method = "GET"sv,
+    .max_data = 24_m,
+    .max_stream_data_bidi_local = 16_m,
+    .max_stream_data_uni = 16_m,
+    .max_streams_uni = 100,
+    .cc_algo = NGTCP2_CC_ALGO_CUBIC,
+    .initial_rtt = NGTCP2_DEFAULT_INITIAL_RTT,
+    .handshake_timeout = UINT64_MAX,
+    .ack_thresh = 2,
+    .initial_pkt_num = UINT32_MAX,
+    .client_ip = "",
+  };
+}
+} // namespace
+
+namespace {
 void print_help() {
   print_usage();
 
@@ -2627,6 +2681,8 @@ Options:
               to send  per an event  loop in a single  connection.  It
               defaults  to 0,  which means  it is  not limited  by the
               configuration.
+  --client-ip=<IP>
+              Specify the client IP address to use.
   -h, --help  Display this help and exit.
 
 ---
@@ -2714,6 +2770,7 @@ int main(int argc, char **argv) {
       {"no-gso", no_argument, &flag, 45},
       {"show-stat", no_argument, &flag, 46},
       {"gso-burst", required_argument, &flag, 47},
+      {"client-ip", required_argument, &flag, 48},
       {},
     };
 
@@ -3207,6 +3264,10 @@ int main(int argc, char **argv) {
 
         break;
       }
+      case 48:
+        // --client-ip
+        config.client_ip = optarg;
+        break;
       }
       break;
     default:
