@@ -1218,7 +1218,10 @@ int bind_addr(Address &local_addr, int fd, const InAddr &ia, int family) {
   char *node;
   std::array<char, NI_MAXHOST> nodebuf;
 
-  if (in_addr_empty(ia)) {
+  if (!config.client_ip.empty()) {
+    node = const_cast<char*>(config.client_ip.c_str());
+    hints.ai_flags = 0;
+  } else if (in_addr_empty(ia)) {
     node = nullptr;
   } else {
     if (inet_ntop(family, in_addr_get_ptr(ia), nodebuf.data(),
@@ -1226,7 +1229,6 @@ int bind_addr(Address &local_addr, int fd, const InAddr &ia, int family) {
       std::cerr << "inet_ntop: " << strerror(errno) << std::endl;
       return -1;
     }
-
     node = nodebuf.data();
   }
 
@@ -1244,7 +1246,8 @@ int bind_addr(Address &local_addr, int fd, const InAddr &ia, int family) {
   }
 
   if (!rp) {
-    std::cerr << "Could not bind" << std::endl;
+    // Updated error message to be more informative
+    std::cerr << "Could not bind to address " << (node ? node : "auto-selected") << ": " << strerror(errno) << std::endl;
     return -1;
   }
 
@@ -1265,6 +1268,35 @@ int bind_addr(Address &local_addr, int fd, const InAddr &ia, int family) {
 #ifndef HAVE_LINUX_RTNETLINK_H
 namespace {
 int connect_sock(Address &local_addr, int fd, const Address &remote_addr) {
+  if (!config.client_ip.empty()) {
+    addrinfo hints_bind{
+      .ai_family = remote_addr.su.sa.sa_family,
+      .ai_socktype = SOCK_DGRAM,
+    };
+    addrinfo *res_bind, *rp_bind;
+
+    if (auto rv = getaddrinfo(config.client_ip.c_str(), "0", &hints_bind, &res_bind); rv != 0) {
+      std::cerr << "getaddrinfo for client_ip bind failed: " << gai_strerror(rv) << std::endl;
+      return -1;
+    }
+
+    auto res_bind_d = defer(freeaddrinfo, res_bind);
+
+    for (rp_bind = res_bind; rp_bind; rp_bind = rp_bind->ai_next) {
+      if (bind(fd, rp_bind->ai_addr, rp_bind->ai_addrlen) != -1) {
+        break;
+      }
+    }
+
+    if (!rp_bind) {
+      std::cerr << "Could not bind to client_ip " << config.client_ip << ": " << strerror(errno) << std::endl;
+      return -1;
+    }
+    if (!config.quiet) {
+        std::cerr << "Successfully bound to client_ip: " << config.client_ip << std::endl;
+    }
+  }
+
   if (connect(fd, remote_addr.as_sockaddr(), remote_addr.size()) != 0) {
     std::cerr << "connect: " << strerror(errno) << std::endl;
     return -1;
@@ -2627,6 +2659,8 @@ Options:
               to send  per an event  loop in a single  connection.  It
               defaults  to 0,  which means  it is  not limited  by the
               configuration.
+  --client-ip=<IP>
+              Specify the client IP address to use.
   -h, --help  Display this help and exit.
 
 ---
@@ -2714,6 +2748,7 @@ int main(int argc, char **argv) {
       {"no-gso", no_argument, &flag, 45},
       {"show-stat", no_argument, &flag, 46},
       {"gso-burst", required_argument, &flag, 47},
+      {"client-ip", required_argument, &flag, 48},
       {},
     };
 
@@ -3207,6 +3242,10 @@ int main(int argc, char **argv) {
 
         break;
       }
+      case 48:
+        // --client-ip
+        config.client_ip = optarg;
+        break;
       }
       break;
     default:
